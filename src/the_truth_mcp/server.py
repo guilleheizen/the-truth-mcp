@@ -108,16 +108,39 @@ def save_info(
         str | None,
         Field(description="URL o referencia de origen. Va al front-matter."),
     ] = None,
+    defer_groom: Annotated[
+        bool,
+        Field(
+            description=(
+                "Si True, NO dispara a Gemini — solo escribe el archivo crudo en raw/ y "
+                "vuelve casi instantáneo (<100ms). El wiki/ NO se actualiza hasta que "
+                "alguien llame `vault_groom`. Usalo cuando vas a guardar varios docs "
+                "seguidos: groom una sola vez al final del batch es mucho más barato "
+                "y eficiente que groom por cada save. Default: False (groom inmediato)."
+            )
+        ),
+    ] = False,
 ) -> dict:
-    """Guarda info nueva en la bóveda.
+    """Guarda una fuente nueva en la bóveda.
 
-    Flujo automático:
-      1. Plonk del contenido crudo en `raw/seed/<slug>.md` (inmutable).
-      2. Dispara al bibliotecario Gemini, que reorganiza `wiki/` para reflejar
-         la nueva fuente: crea/actualiza páginas, mantiene cross-references.
+    Por default hace dos cosas en una llamada:
+      1. Plonk del contenido crudo en `raw/<slug>.md` (inmutable, append-only).
+      2. Dispara a Gemini para que reorganice `wiki/` y absorba la nueva fuente.
 
-    Si Gemini falla (sin red, sin API key), el archivo crudo igual queda
-    guardado — raw es la verdad, wiki es una vista derivada.
+    El paso 2 es lento (~10–30s). Si vas a guardar varias cosas seguidas, pasá
+    `defer_groom=True` y llamá `vault_groom` al final — Gemini procesa todos
+    los pendientes de una sola vez, ahorrando tiempo y cuota de API.
+
+    Si Gemini falla (sin red, key vencida, 503), el archivo crudo igual queda
+    guardado: `raw/` es la verdad, `wiki/` es una vista derivada que se puede
+    regenerar cuando vuelvas a tener red corriendo `vault_groom`.
+
+    Returns: dict con
+      - `saved_at`: ruta relativa al archivo en raw/.
+      - `gemini_summary` + `operations_applied`: si NO se deferreó.
+      - `deferred`: True si se deferreó (sin tocar wiki/).
+      - `gemini_error`: string si Gemini falló (la fuente igual quedó en raw/).
+      - `error`: string si no se pudo adquirir el lock del vault en 60s.
     """
     try:
         with vault.vault_lock():
@@ -125,10 +148,21 @@ def save_info(
             vault.append_log(
                 "ingest",
                 f"save_info {raw_path}",
-                body=f"- archivo: {raw_path}\n- source: {source or '(no especificado)'}",
+                body=(
+                    f"- archivo: {raw_path}\n"
+                    f"- source: {source or '(no especificado)'}\n"
+                    f"- defer_groom: {defer_groom}"
+                ),
             )
 
             response: dict = {"saved_at": raw_path}
+
+            if defer_groom:
+                response["deferred"] = True
+                response["hint"] = (
+                    "wiki/ no se actualizó. Llamá `vault_groom` cuando termines el batch."
+                )
+                return response
 
             try:
                 plan, result = gemini_agent.reorganize(dry_run=False)
@@ -139,12 +173,82 @@ def save_info(
             except Exception as e:
                 response["gemini_error"] = (
                     f"El bibliotecario falló: {e}. La fuente quedó guardada en raw/, pero wiki/ no se actualizó. "
-                    "Podés reintentar después corrigiendo el problema (ej. API key)."
+                    "Podés reintentar después corriendo `vault_groom` (ej. cuando vuelvas a tener red o renueves la API key)."
                 )
 
             return response
     except TimeoutError as e:
         return {"error": str(e)}
+
+
+@mcp.tool()
+def vault_groom() -> dict:
+    """Pide a Gemini que reorganice `wiki/` ahora.
+
+    Cuándo usar esta tool:
+      - Después de un batch de `save_info(defer_groom=True)`: Gemini absorbe
+        todos los raws pendientes de una sola pasada (mucho más eficiente que
+        groom por save).
+      - Cuando editaste `AGENTS.md` y querés que Gemini relea las convenciones
+        y aplique cambios estructurales al wiki/ existente.
+      - Como tarea programada (cron / launchd / GitHub Action) corriendo
+        `the-truth-mcp groom <vault>` cada N horas.
+
+    Cuándo NO usar:
+      - No hace falta llamarla después de un `save_info` con default
+        (`defer_groom=False`) — ese ya hizo el groom.
+      - Si `vault_status` muestra `raw_pending: []` y no editaste `AGENTS.md`,
+        groomear de nuevo es desperdicio de tokens.
+
+    Es lock-protegido: si otro `save_info` o `vault_groom` está corriendo,
+    espera hasta 60s y después devuelve `error`.
+
+    Returns: dict con
+      - `summary`: resumen humano del plan que ejecutó Gemini.
+      - `operations_applied`: lista de operaciones aplicadas (ej.
+        `"created wiki/foo.md"`, `"merged [a,b] → c"`). Vacía si no hubo nada
+        que hacer.
+      - `errors`: errores no fatales por operación (si los hubo).
+      - `error`: string si no se pudo adquirir el lock o Gemini falló.
+    """
+    try:
+        with vault.vault_lock():
+            try:
+                plan, result = gemini_agent.reorganize(dry_run=False)
+            except Exception as e:
+                return {
+                    "error": (
+                        f"El bibliotecario falló: {e}. La bóveda no se modificó. "
+                        "Reintentá cuando vuelvas a tener red o renueves la API key."
+                    )
+                }
+            response: dict = {
+                "summary": plan.summary,
+                "operations_applied": result.applied,
+            }
+            if result.errors:
+                response["errors"] = result.errors
+            return response
+    except TimeoutError as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def vault_status() -> dict:
+    """Snapshot del estado de la bóveda. Útil para decidir si correr `vault_groom`.
+
+    Returns: dict con
+      - `vault_root`: path absoluto de la bóveda.
+      - `wiki_pages`: cantidad de páginas en wiki/ (excluye index.md).
+      - `raw_total`: cantidad total de fuentes en raw/.
+      - `raw_pending`: lista de paths de raws que TODAVÍA NO están referenciados
+        en el campo `sources:` de ninguna página de wiki/. Si tiene elementos,
+        hay material para procesar — llamá `vault_groom`.
+      - `raw_processed`: cantidad de raws ya integrados al wiki/.
+      - `last_groom`: timestamp ISO-8601 UTC del último groom exitoso, o `null`
+        si nunca corrió (vault recién creado).
+    """
+    return vault.vault_status()
 
 
 # ──────────────────────────────────────────────────────────────────────────────

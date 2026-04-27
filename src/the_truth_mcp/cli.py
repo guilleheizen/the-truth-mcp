@@ -10,6 +10,7 @@
                                              (`~/.gemini/settings.json`).
 `uv run the-truth-mcp run`                → alias explícito del server.
 `uv run the-truth-mcp doctor [<path>]`    → verifica el setup (env vars, key, vault).
+`uv run the-truth-mcp groom <path>`       → corre Gemini contra el vault (cron-friendly).
 `uv run the-truth-mcp --version`          → imprime la versión.
 """
 
@@ -193,6 +194,49 @@ def doctor(vault_path: Path | None) -> int:
         return 0
     print("Faltan cosas — ver errores arriba.")
     return 1
+
+
+def groom(vault_path: Path) -> int:
+    """Dispara una reorganización de Gemini contra el vault, scriptable.
+
+    Pensado para correr como cron / launchd / GitHub Action — la API key se
+    resuelve igual que para el server (shell env > <vault>/.env >
+    ~/.config/the-truth-mcp/.env).
+    """
+    from dotenv import load_dotenv
+
+    target = vault_path.expanduser().resolve()
+    if not target.is_dir():
+        print(f"error: el vault no existe: {target}", file=sys.stderr)
+        return 1
+
+    # Resolución de env igual que el server.
+    load_dotenv()
+    load_dotenv(target / ".env", override=False)
+    load_dotenv(Path.home() / ".config" / "the-truth-mcp" / ".env", override=False)
+    os.environ["VAULT_PATH"] = str(target)
+
+    from . import gemini_agent, vault as vault_mod  # noqa: E402
+
+    print(f"→ Groom contra {target}")
+    try:
+        with vault_mod.vault_lock(timeout=60):
+            try:
+                plan, result = gemini_agent.reorganize(dry_run=False)
+            except Exception as e:
+                print(f"error: el bibliotecario falló: {e}", file=sys.stderr)
+                return 2
+    except TimeoutError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 3
+
+    print(f"  resumen: {plan.summary}")
+    print(f"  operaciones: {len(result.applied)} aplicadas, {len(result.errors)} errores")
+    for op in result.applied:
+        print(f"    ✓ {op}")
+    for err in result.errors:
+        print(f"    ✗ {err}")
+    return 0 if not result.errors else 4
 
 
 _GIT_REPO = "git+https://github.com/guilleheizen/the-truth-mcp"
@@ -662,6 +706,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_doc.add_argument("path", nargs="?", help="Ruta del vault a verificar (opcional)")
     p_doc.set_defaults(handler="doctor")
 
+    p_groom = sub.add_parser(
+        "groom",
+        help="Dispara una reorganización de Gemini contra el vault. Cron-friendly.",
+    )
+    p_groom.add_argument("path", help="Ruta del vault a groomear.")
+    p_groom.set_defaults(handler="groom")
+
     # install-claude — Anthropic Claude Code.
     p_inst = sub.add_parser(
         "install-claude",
@@ -726,6 +777,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if handler == "doctor":
         return doctor(Path(parsed.path) if parsed.path else None)
+
+    if handler == "groom":
+        return groom(Path(parsed.path))
 
     if handler == "install-claude":
         return install(

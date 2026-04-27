@@ -126,14 +126,16 @@ Editás el `AGENTS.md`, guardás algo nuevo, y Gemini empieza a respetar la conv
 
 ## Tools y Resources del MCP
 
-**Tools** (4):
+**Tools** (6):
 
 | Tool | Descripción |
 |---|---|
 | `vault_search(query, limit?)` | Grep en `wiki/`. Devuelve archivo + línea. |
 | `vault_read_page(slug_or_path)` | Contenido completo de una página. |
 | `vault_list_pages(category?)` | Lista páginas. `category` es subcarpeta de `wiki/` (libre). |
-| `save_info(content, title?, slug?, source?)` | Guarda crudo en `raw/` + dispara Gemini. |
+| `vault_status()` | Snapshot: páginas, raws pendientes, último groom. Usalo antes de decidir si correr `vault_groom`. |
+| `save_info(content, …, defer_groom?)` | Guarda crudo en `raw/`. Por default dispara Gemini; con `defer_groom=true` solo escribe el archivo (rápido, para batches). |
+| `vault_groom()` | Pide a Gemini que reorganice `wiki/` ahora. Llamala después de un batch de `save_info(defer_groom=true)`, o cuando edites `AGENTS.md`. |
 
 **Resources** (lectura via `@`-mention):
 
@@ -141,6 +143,22 @@ Editás el `AGENTS.md`, guardás algo nuevo, y Gemini empieza a respetar la conv
 - `vault://log` — la bitácora completa
 - `vault://agents` — el `AGENTS.md` (schema vivo)
 - `vault://page/{category}/{slug}` — cualquier página
+
+### Patrón eficiente: ingest rápido + groom diferido
+
+Si vas a guardar varios docs seguidos, no dispares Gemini en cada `save_info`. El flujo recomendado:
+
+```
+save_info(doc1, defer_groom=true)   ← ~100ms
+save_info(doc2, defer_groom=true)   ← ~100ms
+save_info(doc3, defer_groom=true)   ← ~100ms
+…
+vault_groom()                       ← una sola corrida de Gemini que absorbe los tres raws
+```
+
+Costo: 1 llamada de Gemini en vez de N. Tiempo: ~30s al final, en vez de 3×30s espaciados. La bóveda queda igual de organizada.
+
+Para automatizar el groom periódicamente, usá el CLI `the-truth-mcp groom <vault>` (ver más abajo) en cron / launchd / GitHub Action.
 
 ---
 
@@ -180,12 +198,30 @@ the-truth-mcp install-claude --vault <p>   # registra en Claude Code (~/.claude.
 the-truth-mcp install-codex  --vault <p>   # registra en Codex CLI (~/.codex/config.toml)
 the-truth-mcp install-gemini --vault <p>   # registra en Gemini CLI (~/.gemini/settings.json)
 the-truth-mcp doctor [<path>]              # verifica setup (env vars, key, vault, salud de Gemini)
+the-truth-mcp groom <path>                 # corre Gemini contra el vault (cron-friendly)
 the-truth-mcp --version
 ```
 
 Las flags compartidas por los tres `install-*` son: `--vault`, `--key` (opcional si la key ya está en tu shell), `--model`, `--name`, `--local`. El comando `install-claude` acepta además `--scope {user,local,project}` para elegir dónde registrar el MCP en Claude Code.
 
 Podés correr varios `install*` contra la misma bóveda — cada cliente tiene su propio archivo de config y la key se comparte vía `~/.config/the-truth-mcp/.env`.
+
+### Programar groom recurrente
+
+`the-truth-mcp groom <vault>` es un wrapper sobre la tool `vault_groom` pensado para correr fuera de un cliente MCP — útil cuando guardás docs en modo `defer_groom=true` durante el día y querés que Gemini reorganice de noche. Ejemplos:
+
+```bash
+# launchd (macOS): ~/Library/LaunchAgents/com.the-truth.groom.plist apunta a:
+the-truth-mcp groom ~/Documents/my-vault
+
+# cron (Linux): crontab -e — corre todas las noches a las 3 AM
+0 3 * * * /usr/local/bin/the-truth-mcp groom $HOME/Documents/my-vault >> $HOME/.the-truth-groom.log 2>&1
+
+# GitHub Action: el repo del vault tiene un workflow que groomea cada commit
+# (ver examples/ para un yaml de muestra).
+```
+
+El comando lee la API key del shell, del `.env` del vault, o de `~/.config/the-truth-mcp/.env` — el mismo orden que el server. Exit codes: `0` ok, `1` vault inexistente, `2` Gemini falló, `3` lock timeout, `4` groom corrió pero hubo errores en operaciones individuales.
 
 ---
 

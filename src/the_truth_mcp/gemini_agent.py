@@ -250,6 +250,11 @@ def reorganize(*, dry_run: bool = False) -> tuple[Plan, ApplyResult]:
     ]
     vault.append_log("reorganize", title, body="\n".join(body_lines))
 
+    # Stamp del último groom — usado por vault_status() para que el cliente
+    # decida si conviene volver a groomear.
+    if not dry_run:
+        vault.mark_groomed()
+
     return plan, result
 
 

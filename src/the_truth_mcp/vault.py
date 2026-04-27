@@ -12,7 +12,7 @@ import re
 import shutil
 import time
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from .schemas import (
@@ -228,6 +228,27 @@ def _wiki_sources_index() -> set[str]:
     return found
 
 
+_LAST_GROOM_STAMP = ".last_groom"
+
+
+def mark_groomed() -> None:
+    """Toca el stamp `.last_groom` en la raíz del vault.
+
+    Lo llama `gemini_agent.reorganize` después de aplicar el plan exitosamente.
+    El mtime del archivo es el timestamp del último groom — barato y compatible
+    con cualquier OS sin tracking adicional.
+    """
+    (vault_root() / _LAST_GROOM_STAMP).touch()
+
+
+def last_groom_at() -> datetime | None:
+    """Timestamp UTC del último groom exitoso, o None si nunca corrió."""
+    stamp = vault_root() / _LAST_GROOM_STAMP
+    if not stamp.is_file():
+        return None
+    return datetime.fromtimestamp(stamp.stat().st_mtime, tz=timezone.utc)
+
+
 def vault_status() -> dict[str, object]:
     """Snapshot del estado: cuántas páginas, cuántas fuentes, qué está pendiente.
 
@@ -239,12 +260,14 @@ def vault_status() -> dict[str, object]:
     raw_files = list_raw()
     pending = [p for p in raw_files if p not in referenced]
     pages = list_pages()
+    last_groom = last_groom_at()
     return {
         "vault_root": str(root),
         "wiki_pages": len(pages),
         "raw_total": len(raw_files),
         "raw_pending": pending,
         "raw_processed": len(raw_files) - len(pending),
+        "last_groom": last_groom.isoformat() if last_groom else None,
     }
 
 

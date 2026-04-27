@@ -435,3 +435,41 @@ def test_vault_status_distinguishes_pending_and_processed(vault_setup: Path):
     assert status["raw_pending"] == ["raw/pending.md"]
     assert status["wiki_pages"] == 1
     assert status["vault_root"] == str(vault_setup.resolve())
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# mark_groomed / last_groom_at
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_last_groom_at_is_none_when_never_groomed(vault_setup: Path):
+    assert vault.last_groom_at() is None
+
+
+def test_mark_groomed_creates_stamp(vault_setup: Path):
+    vault.mark_groomed()
+    assert (vault_setup / ".last_groom").is_file()
+
+
+def test_last_groom_at_returns_recent_utc_after_mark(vault_setup: Path):
+    from datetime import datetime, timezone, timedelta
+
+    before = datetime.now(timezone.utc) - timedelta(seconds=2)
+    vault.mark_groomed()
+    after = datetime.now(timezone.utc) + timedelta(seconds=2)
+    ts = vault.last_groom_at()
+    assert ts is not None
+    assert ts.tzinfo is not None
+    assert before <= ts <= after
+
+
+def test_vault_status_includes_last_groom_null_when_unset(vault_setup: Path):
+    assert vault.vault_status()["last_groom"] is None
+
+
+def test_vault_status_includes_last_groom_iso_after_mark(vault_setup: Path):
+    vault.mark_groomed()
+    last = vault.vault_status()["last_groom"]
+    assert isinstance(last, str)
+    # ISO-8601 con timezone UTC.
+    assert last.endswith("+00:00") or last.endswith("Z")

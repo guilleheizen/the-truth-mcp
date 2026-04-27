@@ -2,6 +2,10 @@
 .env
 .envrc
 
+# the-truth-mcp runtime files
+.lock
+.last_groom
+
 # Client-specific runtime files (audit logs, caches)
 .claude/audit.log
 .claude/audit-*.log
