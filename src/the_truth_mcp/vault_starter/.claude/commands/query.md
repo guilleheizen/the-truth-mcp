@@ -17,8 +17,8 @@ Pregunta: **$ARGUMENTS**
    Típicamente 2-5 páginas alcanzan.
 
 3. **Sintetizá la respuesta** citando cada afirmación con la ruta del archivo:
-   `(wiki/conceptos/attention.md)`. Si una afirmación viene de la fuente cruda,
-   citá la ruta de `raw/`.
+   `(wiki/foo.md)` o `(wiki/<subcarpeta>/foo.md)`. Si una afirmación viene de
+   la fuente cruda, citá la ruta de `raw/`.
 
 4. **Si la pregunta toca algo que no está en la bóveda**, decilo explícito.
    No inventes. Sugerí `/ingest <fuente>` para cubrirlo.

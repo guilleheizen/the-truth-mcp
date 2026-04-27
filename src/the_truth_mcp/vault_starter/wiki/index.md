@@ -1,16 +1,6 @@
 # Index
 
-> Catálogo de la bóveda. Cada entrada: `- [[slug]] — descripción de una línea`.
-> Gemini actualiza este archivo en cada `save_info`.
+> Catálogo de la bóveda. Gemini lo actualiza en cada `save_info`.
+> Cada entrada: `- [[slug]] — descripción de una línea`.
 
-## Conceptos
-
-_(vacío — se poblará con el primer `/ingest`)_
-
-## Personas
-
-_(vacío)_
-
-## Papers
-
-_(vacío)_
+_(vacío — esta bóveda arranca limpia. Tu primer `/ingest` va a llenar este índice.)_

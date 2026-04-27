@@ -151,13 +151,13 @@ def search(query: str, limit: int = 50) -> list[dict[str, object]]:
     return out
 
 
-def list_raw_seed() -> list[str]:
-    """Archivos en raw/seed/."""
+def list_raw() -> list[str]:
+    """Archivos en raw/. Estructura plana — Gemini decide la organización del wiki."""
     root = vault_root()
-    base = root / "raw" / "seed"
+    base = root / "raw"
     if not base.is_dir():
         return []
-    return sorted(str(p.relative_to(root)) for p in base.glob("*.md"))
+    return sorted(str(p.relative_to(root)) for p in base.rglob("*.md"))
 
 
 _SOURCES_RE = re.compile(r"(?ms)^sources:\s*\n((?:[ \t]*-\s+.+\n?)*)")
@@ -182,22 +182,22 @@ def _wiki_sources_index() -> set[str]:
 
 
 def vault_status() -> dict[str, object]:
-    """Snapshot del estado: cuántas páginas, qué hay en raw/, qué está pendiente.
+    """Snapshot del estado: cuántas páginas, cuántas fuentes, qué está pendiente.
 
-    Una fuente en raw/seed/ se considera "pendiente" si no aparece referenciada
+    Una fuente en `raw/` se considera "pendiente" si no aparece referenciada
     en el campo `sources:` de ninguna página de wiki/.
     """
     root = vault_root()
     referenced = _wiki_sources_index()
-    raw_seed = list_raw_seed()
-    pending = [p for p in raw_seed if p not in referenced]
+    raw_files = list_raw()
+    pending = [p for p in raw_files if p not in referenced]
     pages = list_pages()
     return {
         "vault_root": str(root),
         "wiki_pages": len(pages),
-        "raw_seed_total": len(raw_seed),
-        "raw_seed_pending": pending,
-        "raw_seed_processed": len(raw_seed) - len(pending),
+        "raw_total": len(raw_files),
+        "raw_pending": pending,
+        "raw_processed": len(raw_files) - len(pending),
     }
 
 
@@ -241,7 +241,7 @@ def add_to_raw(
     title: str | None = None,
     source: str | None = None,
 ) -> str:
-    """Guarda contenido nuevo en raw/seed/<slug>.md.
+    """Guarda contenido nuevo en raw/<slug>.md.
 
     Es la única vía por la que entra info nueva a la bóveda. No procesa, no
     analiza. Si ya existe el archivo, falla — no sobrescribe (raw es sagrado).
@@ -249,9 +249,9 @@ def add_to_raw(
     if not slug and not title:
         raise ValueError("Necesito al menos `slug` o `title` para nombrar el archivo")
     final_slug = slug or slugify(title or "")
-    target = _safe_path(f"raw/seed/{final_slug}.md")
+    target = _safe_path(f"raw/{final_slug}.md")
     if target.exists():
-        raise FileExistsError(f"raw/seed/{final_slug}.md ya existe — raw es inmutable")
+        raise FileExistsError(f"raw/{final_slug}.md ya existe — raw es inmutable")
     target.parent.mkdir(parents=True, exist_ok=True)
 
     # Si no hay front-matter, lo agregamos

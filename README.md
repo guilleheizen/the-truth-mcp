@@ -56,11 +56,11 @@ Claude Code detecta el `.mcp.json` y te pregunta si querés cargar el MCP `the-t
 
 1. Claude fetchea la fuente (URL, PDF, texto).
 2. Llama a la tool `save_info` del MCP.
-3. El MCP guarda el contenido crudo en `raw/seed/<slug>.md` (inmutable).
+3. El MCP guarda el contenido crudo en `raw/<slug>.md` (inmutable).
 4. El MCP dispara automáticamente al **bibliotecario Gemini**, que:
    - Lee `CLAUDE.md` (el schema), todas las fuentes en `raw/`, y el estado actual de `wiki/`.
-   - Decide qué páginas crear, actualizar, fusionar, dividir, o linkear.
-   - Aplica los cambios sobre `wiki/`.
+   - **Decide la estructura de `wiki/`** según el contenido: subcarpetas, categorías, todo.
+   - Crea/actualiza/fusiona/linkea páginas.
 5. El log en `log.md` queda con la entrada.
 
 ### Consultar (`/query <pregunta>`)
@@ -77,7 +77,7 @@ Claude Code detecta el `.mcp.json` y te pregunta si querés cargar el MCP `the-t
 |---|---|
 | `vault_search(query, limit?)` | Grep en `wiki/`. Devuelve archivo + línea. |
 | `vault_read_page(slug_or_path)` | Contenido completo de una página. |
-| `vault_list_pages(category?)` | Lista por categoría (`conceptos`, `personas`, `papers`). |
+| `vault_list_pages(category?)` | Lista páginas. `category` es la subcarpeta dentro de `wiki/` (libre). |
 | `save_info(content, title?, slug?, source?)` | Guarda crudo + dispara Gemini. |
 
 **Resources** (lectura via `@`-mention en Claude Code):
@@ -107,16 +107,13 @@ my-vault/
 │   ├── settings.json            ← permissions + hooks
 │   ├── commands/{ingest,query}.md
 │   └── skills/markdown-cleaner/SKILL.md
-├── raw/
-│   ├── seed/                    ← fuentes ingestadas (inmutables)
-│   └── pending/                 ← fuentes a procesar manualmente
-├── wiki/                        ← mantenido por Gemini
-│   ├── index.md
-│   ├── conceptos/
-│   ├── personas/
-│   └── papers/
+├── raw/                         ← fuentes inmutables (vacío al inicio)
+├── wiki/                        ← mantenido por Gemini (vacío al inicio)
+│   └── index.md
 └── log.md                       ← bitácora append-only
 ```
+
+La bóveda **arranca vacía**. No hay categorías predefinidas (`conceptos/`, `papers/`, etc.). Gemini observa qué guardás y decide la organización. Si querés guiar la estructura para tu dominio, agregalo al `CLAUDE.md` del vault — Gemini la respeta.
 
 ## Por qué Gemini y no Claude para reorganizar
 
@@ -148,13 +145,14 @@ src/the_truth_mcp/
 
 ## Adaptable a tu dominio
 
-Las categorías por defecto del template (`conceptos/`, `personas/`, `papers/`) son una convención del **`CLAUDE.md` del vault**, no del MCP. Para adaptar la bóveda a otro dominio:
+La bóveda no impone categorías. Gemini decide la estructura según lo que guardes — pero podés guiar esa decisión escribiendo convenciones en el `CLAUDE.md` del vault. Hay una sección "Convenciones de mi dominio" reservada para eso. Ejemplos:
 
-1. Editás la sección "Estructura de `wiki/`" del `CLAUDE.md` describiendo tus categorías.
-2. Renombrás / creás las carpetas en `wiki/`.
-3. Listo — Gemini lee el `CLAUDE.md` actualizado en cada `save_info` y respeta las nuevas convenciones.
+- **Producto/equipo**: `features/`, `decisiones/`, `incidentes/`, con un campo `severity` en el front-matter.
+- **Consultoría**: `clientes/`, `proyectos/`, `lecciones-aprendidas/`.
+- **Investigación técnica**: `conceptos/`, `personas/`, `papers/`.
+- **Cocina**: `recetas/`, `tecnicas/`, `ingredientes/`.
 
-Ejemplos: producto (`features/`, `decisiones/`, `incidentes/`), consultoría (`clientes/`, `proyectos/`, `lecciones-aprendidas/`), cocina (`recetas/`, `tecnicas/`, `ingredientes/`). El MCP en sí mismo no impone categorías — solo provee la mecánica de "raw inmutable + wiki gestionado por agente + log auditable".
+Editás el `CLAUDE.md`, guardás info nueva, y Gemini empieza a respetar la convención. **No hace falta tocar código.**
 
 ## Limitaciones conocidas
 
