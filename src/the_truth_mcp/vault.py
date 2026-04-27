@@ -24,16 +24,21 @@ from .schemas import (
 )
 
 
+VAULT_PATH_VARS = ("VAULT_PATH", "LLM_WIKI_PATH")
+
+
 def vault_root() -> Path:
-    """Path absoluto a la bóveda. Lee LLM_WIKI_PATH del entorno."""
-    p = os.environ.get("LLM_WIKI_PATH")
+    """Path absoluto a la bóveda. Lee VAULT_PATH (o LLM_WIKI_PATH como alias)."""
+    p = next((os.environ[v] for v in VAULT_PATH_VARS if os.environ.get(v)), None)
     if not p:
         raise RuntimeError(
-            "LLM_WIKI_PATH no está seteada. Definila en .env o en el environment."
+            "El path de la bóveda no está seteado. Definí una de estas variables: "
+            f"{', '.join(VAULT_PATH_VARS)}.\n"
+            "Ejemplo: `export VAULT_PATH=~/Documents/my-vault`."
         )
     root = Path(p).expanduser().resolve()
     if not root.is_dir():
-        raise RuntimeError(f"LLM_WIKI_PATH apunta a un directorio inexistente: {root}")
+        raise RuntimeError(f"El path de la bóveda apunta a un directorio inexistente: {root}")
     return root
 
 
@@ -125,9 +130,22 @@ def read_log(n: int = 20) -> str:
     return head + "".join(entries[-n:])
 
 
-def read_claude_md() -> str:
-    """El schema vivo. Útil para inyectarlo al prompt de Gemini."""
-    return (vault_root() / "CLAUDE.md").read_text(encoding="utf-8")
+def read_agents_md() -> str:
+    """El schema vivo. Útil para inyectarlo al prompt de Gemini.
+
+    Busca primero AGENTS.md (nombre canónico, agent-agnostic). Si no existe,
+    cae a CLAUDE.md por compatibilidad con vaults viejos.
+    """
+    root = vault_root()
+    for name in ("AGENTS.md", "CLAUDE.md"):
+        candidate = root / name
+        if candidate.is_file():
+            return candidate.read_text(encoding="utf-8")
+    raise FileNotFoundError(f"Ni AGENTS.md ni CLAUDE.md encontrados en {root}")
+
+
+# Alias deprecado para back-compat. Se removerá en una versión futura.
+read_claude_md = read_agents_md
 
 
 def search(query: str, limit: int = 50) -> list[dict[str, object]]:

@@ -69,7 +69,7 @@ Una carpeta así, **mantenida automáticamente** a medida que tirás fuentes:
 
 ```
 my-vault/
-├── CLAUDE.md         ← reglas del juego (vos las editás, Gemini las lee)
+├── AGENTS.md         ← reglas del juego (vos las editás, Gemini las lee)
 ├── raw/              ← inmutable: cada fuente que entró
 │   ├── software-2-0.md
 │   ├── attention-paper.md
@@ -89,7 +89,7 @@ my-vault/
 
 ## Arranca limpio, se adapta a tu dominio
 
-La bóveda **no impone categorías**. Gemini observa qué guardás y decide la organización. Si querés guiar la estructura, escribís convenciones en el `CLAUDE.md` del vault (hay una sección reservada).
+La bóveda **no impone categorías**. Gemini observa qué guardás y decide la organización. Si querés guiar la estructura, escribís convenciones en el `AGENTS.md` del vault (hay una sección reservada).
 
 Algunos ejemplos de configuración (ver [`examples/`](examples/) en el repo):
 
@@ -99,7 +99,7 @@ Algunos ejemplos de configuración (ver [`examples/`](examples/) en el repo):
 - **Aprendizaje personal**: `temas/`, `recursos/`, `dudas/`
 - **Cocina**: `recetas/`, `tecnicas/`, `ingredientes/`
 
-Editás el `CLAUDE.md`, guardás algo nuevo, y Gemini empieza a respetar la convención. Sin tocar código.
+Editás el `AGENTS.md`, guardás algo nuevo, y Gemini empieza a respetar la convención. Sin tocar código.
 
 ---
 
@@ -118,7 +118,7 @@ Editás el `CLAUDE.md`, guardás algo nuevo, y Gemini empieza a respetar la conv
 
 - `vault://index` — el catálogo
 - `vault://log` — la bitácora completa
-- `vault://claude` — el `CLAUDE.md` (schema vivo)
+- `vault://agents` — el `AGENTS.md` (schema vivo)
 - `vault://page/{category}/{slug}` — cualquier página
 
 ---
@@ -129,7 +129,7 @@ Variables de entorno (cualquiera de estas formas funciona: shell, `.env` del vau
 
 | Variable | Obligatoria | Default | Descripción |
 |---|---|---|---|
-| `LLM_WIKI_PATH` | sí | — | Path absoluto a la bóveda. `init` ya lo deja en `.mcp.json`. |
+| `VAULT_PATH` | sí | — | Path absoluto a la bóveda. `init` ya lo deja en `.mcp.json`. Alias: `LLM_WIKI_PATH`. |
 | `GEMINI_API_KEY` | sí (para `save_info`) | — | API key de [Google AI Studio](https://aistudio.google.com/apikey). |
 | `GEMINI_MODEL` | no | `gemini-2.5-flash` | Modelo del bibliotecario. `gemini-2.5-pro` para más calidad. |
 

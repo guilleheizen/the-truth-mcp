@@ -2,12 +2,13 @@
 
 Local-only, transport stdio. Configurable por env vars:
   - GEMINI_API_KEY   (obligatoria — el bibliotecario corre con cada save_info)
-  - LLM_WIKI_PATH    (obligatoria — path absoluto a la bóveda)
+  - VAULT_PATH       (obligatoria — path absoluto a la bóveda; alias: LLM_WIKI_PATH)
   - GEMINI_MODEL     (opcional, default gemini-2.5-flash)
 
-Diseño minimalista: el cliente (Claude) solo puede hacer dos cosas — consultar
-y guardar. El "guardar" dispara automáticamente al bibliotecario Gemini, que
-ordena la bóveda. La complejidad queda dentro del MCP.
+Diseño minimalista: el agente cliente (Claude Code, Cursor, ChatGPT, etc.)
+solo puede hacer dos cosas — consultar y guardar. El "guardar" dispara
+automáticamente al bibliotecario Gemini, que ordena la bóveda. La complejidad
+queda dentro del MCP.
 
 Tools (4):
   - vault_search       leer: grep en wiki/
@@ -16,7 +17,7 @@ Tools (4):
   - save_info          escribir: plonk en raw/ + Gemini reorganiza wiki/
 
 Resources:
-  - vault://index, vault://log, vault://claude
+  - vault://index, vault://log, vault://agents
   - vault://page/{category}/{slug}
 """
 
@@ -34,7 +35,7 @@ from pydantic import Field
 # Carga .env desde varios lugares razonables (en orden de prioridad descendente).
 # Si una variable ya está en el environment, no se pisa.
 load_dotenv()  # cwd y ancestros
-_vault_path = os.environ.get("LLM_WIKI_PATH")
+_vault_path = os.environ.get("VAULT_PATH") or os.environ.get("LLM_WIKI_PATH")
 if _vault_path:
     load_dotenv(Path(_vault_path).expanduser() / ".env", override=False)
 
@@ -152,10 +153,16 @@ def res_log() -> str:
     return vault.read_log(n=0)
 
 
+@mcp.resource("vault://agents")
+def res_agents() -> str:
+    """AGENTS.md — el schema vivo (alias: vault://claude para back-compat)."""
+    return vault.read_agents_md()
+
+
 @mcp.resource("vault://claude")
-def res_claude() -> str:
-    """CLAUDE.md — el schema vivo."""
-    return vault.read_claude_md()
+def res_claude_alias() -> str:
+    """Alias deprecado de vault://agents. Se removerá en una versión futura."""
+    return vault.read_agents_md()
 
 
 @mcp.resource("vault://page/{category}/{slug}")

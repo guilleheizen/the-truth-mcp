@@ -1,6 +1,6 @@
 # Convenciones de mi dominio — Cocina
 
-> Pegá esto dentro de la sección "Convenciones de mi dominio" del `CLAUDE.md` de tu vault.
+> Pegá esto dentro de la sección "Convenciones de mi dominio" del `AGENTS.md` de tu vault.
 
 ## Categorías de wiki/
 

@@ -140,8 +140,12 @@ def doctor(vault_path: Path | None) -> int:
     if vault_path:
         target = vault_path.expanduser().resolve()
         all_ok &= _check("vault existe", target.is_dir(), detail=str(target))
+        has_agents = (target / "AGENTS.md").is_file()
+        has_claude = (target / "CLAUDE.md").is_file()
         all_ok &= _check(
-            "CLAUDE.md presente", (target / "CLAUDE.md").is_file()
+            "AGENTS.md presente",
+            has_agents or has_claude,
+            detail="(usando CLAUDE.md como fallback)" if has_claude and not has_agents else "",
         )
         all_ok &= _check("raw/ presente", (target / "raw").is_dir())
         all_ok &= _check("wiki/ presente", (target / "wiki").is_dir())
@@ -149,9 +153,9 @@ def doctor(vault_path: Path | None) -> int:
             "log.md presente", (target / "log.md").is_file()
         )
     else:
-        env_vault = os.environ.get("LLM_WIKI_PATH")
+        env_vault = os.environ.get("VAULT_PATH") or os.environ.get("LLM_WIKI_PATH")
         if env_vault:
-            print(f"  ℹ  LLM_WIKI_PATH={env_vault} (re-corré con `doctor {env_vault}` para verificar el vault)")
+            print(f"  ℹ  VAULT_PATH={env_vault} (re-corré con `doctor {env_vault}` para verificar el vault)")
         else:
             print("  ℹ  pasame un path al vault para verificarlo: `the-truth-mcp doctor <path>`")
 

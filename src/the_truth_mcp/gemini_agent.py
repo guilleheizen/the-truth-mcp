@@ -1,6 +1,6 @@
 """El bibliotecario Gemini.
 
-Entrada: el estado actual de la bóveda (CLAUDE.md + raw/* + wiki/**).
+Entrada: el estado actual de la bóveda (AGENTS.md + raw/* + wiki/**).
 Salida: un Plan estructurado con operaciones a aplicar sobre wiki/.
 
 Diseño deliberado de un solo turno (no agent loop): cargamos todo el contexto
@@ -35,7 +35,7 @@ mantener la carpeta `wiki/` ordenada, consistente y bien interconectada, contra
 las fuentes en `raw/`.
 
 Recibís en cada request:
-1. El schema vivo de la bóveda (`CLAUDE.md`) — fuente de verdad sobre las
+1. El schema vivo de la bóveda (`AGENTS.md`) — fuente de verdad sobre las
    convenciones que el usuario quiere para SU dominio.
 2. El listado completo de páginas en `wiki/` con su contenido.
 3. El listado de fuentes en `raw/` con su contenido.
@@ -49,9 +49,9 @@ VOS DECIDÍS LA ESTRUCTURA. La bóveda no impone categorías. Observá el conten
 de las fuentes y decidí cómo organizar `wiki/`:
 - Podés usar subcarpetas (`wiki/concepto-x/`, `wiki/persona-y/`) o no.
 - Podés crear el `type` que tenga sentido para el dominio, o no usar `type`.
-- Si el `CLAUDE.md` define convenciones específicas (sección "Convenciones de mi
+- Si el `AGENTS.md` define convenciones específicas (sección "Convenciones de mi
   dominio" u otras), respetalas.
-- Si el `CLAUDE.md` está vacío en ese aspecto, aplicá tu mejor criterio: leé qué
+- Si el `AGENTS.md` está vacío en ese aspecto, aplicá tu mejor criterio: leé qué
   tipo de info entró y proponé una taxonomía que escale.
 
 Reglas duras (estas no se negocian):
@@ -64,7 +64,7 @@ Reglas duras (estas no se negocian):
 - Al menos 1 wikilink por página (excepto si la bóveda tiene 1 sola página).
 - Front-matter mínimo en cada `create_page` o `update_page`: `title`, `created`
   (YYYY-MM-DD), `updated`, `sources`, `related`. Podés agregar más campos si
-  el dominio lo pide o si el `CLAUDE.md` los define.
+  el dominio lo pide o si el `AGENTS.md` los define.
 - Si un raw está pendiente, prioridad #1: crear las páginas que reflejen su contenido.
 - Si encontrás info duplicada o contradictoria entre páginas, proponé `merge_pages`.
 - Sé conservador: mejor 5 operaciones bien justificadas que 30 ruidosas.
@@ -86,11 +86,11 @@ def _build_user_prompt() -> str:
         "de páginas que crees ahora. NO inventes fechas.\n"
     )
 
-    parts.append("# CLAUDE.md (schema vivo)\n")
+    parts.append("# AGENTS.md (schema vivo)\n")
     try:
-        parts.append("```markdown\n" + vault.read_claude_md() + "\n```\n")
+        parts.append("```markdown\n" + vault.read_agents_md() + "\n```\n")
     except FileNotFoundError:
-        parts.append("_(CLAUDE.md no encontrado — operá con convenciones por defecto)_\n")
+        parts.append("_(AGENTS.md no encontrado — operá con convenciones por defecto)_\n")
 
     status = vault.vault_status()
     parts.append(f"\n# Estado actual\n```json\n{json.dumps(status, indent=2, ensure_ascii=False)}\n```\n")
