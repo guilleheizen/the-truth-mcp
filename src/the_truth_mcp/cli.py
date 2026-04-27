@@ -2,6 +2,8 @@
 
 `uv run the-truth-mcp` (sin args)        → corre el server MCP (default).
 `uv run the-truth-mcp init <path>`       → crea una bóveda nueva en <path>.
+`uv run the-truth-mcp install ...`       → all-in-one: crea vault si falta + registra
+                                            el MCP en Claude Code (scope user).
 `uv run the-truth-mcp run`               → alias explícito del server.
 `uv run the-truth-mcp doctor [<path>]`   → verifica el setup (env vars, key, vault).
 `uv run the-truth-mcp --version`         → imprime la versión.
@@ -10,8 +12,10 @@
 from __future__ import annotations
 
 import argparse
+import json as _json
 import os
 import shutil
+import subprocess
 import sys
 from importlib import resources
 from pathlib import Path
@@ -181,6 +185,102 @@ def doctor(vault_path: Path | None) -> int:
     return 1
 
 
+_GIT_REPO = "git+https://github.com/guilleheizen/the-truth-mcp"
+
+
+def install(
+    vault: Path,
+    key: str,
+    *,
+    model: str = "gemini-2.5-flash",
+    scope: str = "user",
+    name: str = "the-truth",
+    use_local_path: bool = False,
+) -> int:
+    """All-in-one: crea el vault si falta y registra el MCP en Claude Code.
+
+    Si `use_local_path=True`, usa el código local en lugar de bajar del repo
+    público (útil para desarrollo).
+    """
+    if shutil.which("claude") is None:
+        print(
+            "error: no se encuentra el ejecutable `claude` en el PATH. "
+            "Instalá Claude Code primero: https://claude.com/claude-code",
+            file=sys.stderr,
+        )
+        return 1
+
+    target = vault.expanduser().resolve()
+
+    # Crear el vault si todavía no existe
+    if not target.exists() or _is_empty_dir(target):
+        print(f"→ Creando bóveda en {target}")
+        init_vault(target, force=False)
+    else:
+        # Validar que parece un vault del MCP (tiene AGENTS.md o CLAUDE.md)
+        has_schema = (target / "AGENTS.md").is_file() or (target / "CLAUDE.md").is_file()
+        if not has_schema:
+            print(
+                f"error: {target} existe pero no parece un vault de the-truth-mcp "
+                "(falta AGENTS.md). Borralo o usá otro path.",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"→ Bóveda existente detectada en {target}")
+
+    # Quitar registro previo (si existe) para no duplicar
+    subprocess.run(
+        ["claude", "mcp", "remove", "--scope", scope, name],
+        capture_output=True,
+        check=False,
+    )
+
+    # Construir el JSON de config del MCP — usamos `claude mcp add-json` para
+    # evitar el parsing ambiguo de `-e VAR=val` con nombres de servers.
+    if use_local_path:
+        repo_root = str(Path(__file__).resolve().parent.parent.parent)
+        spawn_command = "uv"
+        spawn_args = ["run", "--directory", repo_root, "the-truth-mcp"]
+    else:
+        spawn_command = "uvx"
+        spawn_args = ["--from", _GIT_REPO, "the-truth-mcp"]
+
+    config = {
+        "command": spawn_command,
+        "args": spawn_args,
+        "env": {
+            "VAULT_PATH": str(target),
+            "GEMINI_API_KEY": key,
+            "GEMINI_MODEL": model,
+        },
+    }
+
+    print(f"→ Registrando MCP `{name}` en scope {scope}")
+    result = subprocess.run(
+        ["claude", "mcp", "add-json", "--scope", scope, name, _json.dumps(config)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"error: claude mcp add-json falló:\n{result.stderr}", file=sys.stderr)
+        return result.returncode
+
+    print()
+    print(f"✓ MCP `{name}` instalado.")
+    print(f"  vault: {target}")
+    print(f"  modelo: {model}")
+    print(f"  scope: {scope}")
+    print()
+    print("Probalo:")
+    print(f"  cd {target}")
+    print("  claude")
+    print("  # luego dentro de Claude Code:")
+    print("  /mcp                 # confirma que `the-truth` está conectado")
+    print("  /ingest <url>        # guardar info nueva")
+    print("  /query <pregunta>    # consultar la bóveda")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="the-truth-mcp",
@@ -200,6 +300,43 @@ def build_parser() -> argparse.ArgumentParser:
     p_doc = sub.add_parser("doctor", help="Verifica el setup (env vars, API key, vault).")
     p_doc.add_argument("path", nargs="?", help="Ruta del vault a verificar (opcional)")
     p_doc.set_defaults(handler="doctor")
+
+    p_inst = sub.add_parser(
+        "install",
+        help="Crea el vault si falta y registra el MCP en Claude Code en un solo paso.",
+    )
+    p_inst.add_argument(
+        "--vault",
+        required=True,
+        help="Ruta absoluta a la bóveda (ej: ~/Documents/my-vault). Se crea si no existe.",
+    )
+    p_inst.add_argument(
+        "--key",
+        required=True,
+        help="API key de Gemini (https://aistudio.google.com/apikey). Tier gratis alcanza.",
+    )
+    p_inst.add_argument(
+        "--model",
+        default="gemini-2.5-flash",
+        help="Modelo de Gemini para el bibliotecario (default: gemini-2.5-flash).",
+    )
+    p_inst.add_argument(
+        "--scope",
+        choices=["user", "local", "project"],
+        default="user",
+        help="Scope de Claude Code donde registrar el MCP (default: user).",
+    )
+    p_inst.add_argument(
+        "--name",
+        default="the-truth",
+        help="Nombre del MCP server en Claude Code (default: the-truth).",
+    )
+    p_inst.add_argument(
+        "--local",
+        action="store_true",
+        help="Usar el código local del repo en lugar de uvx desde GitHub (para desarrollo).",
+    )
+    p_inst.set_defaults(handler="install")
 
     return parser
 
@@ -234,6 +371,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if handler == "doctor":
         return doctor(Path(parsed.path) if parsed.path else None)
+
+    if handler == "install":
+        return install(
+            vault=Path(parsed.vault),
+            key=parsed.key,
+            model=parsed.model,
+            scope=parsed.scope,
+            name=parsed.name,
+            use_local_path=parsed.local,
+        )
 
     parser.print_help()
     return 0

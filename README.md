@@ -11,28 +11,28 @@ Un MCP local que convierte una carpeta de markdown en una **bóveda de conocimie
 
 ---
 
-## Quickstart (30 segundos, sin clonar)
+## Quickstart (un solo comando)
 
 Necesitás [`uv`](https://docs.astral.sh/uv/getting-started/installation/), [Claude Code](https://claude.com/claude-code), y una [API key de Gemini](https://aistudio.google.com/apikey) (tier gratis alcanza).
 
 ```bash
-# 1. Crear bóveda — uvx baja el package, ejecuta init, y se va
 uvx --from git+https://github.com/guilleheizen/the-truth-mcp \
-    the-truth-mcp init ~/Documents/my-vault
-
-# 2. Cargar tu API key (en zshrc / bashrc / .env del vault)
-export GEMINI_API_KEY=AIza...
-
-# 3. Verificar setup
-uvx --from git+https://github.com/guilleheizen/the-truth-mcp \
-    the-truth-mcp doctor ~/Documents/my-vault
-
-# 4. Abrir con Claude Code
-cd ~/Documents/my-vault
-claude
+    the-truth-mcp install \
+      --vault ~/Documents/my-vault \
+      --key AIza...your-gemini-key... \
+      --model gemini-2.5-flash
 ```
 
-Al abrirlo, Claude Code detecta el `.mcp.json` del vault y te pregunta si querés cargar el MCP `the-truth`. Decí que sí.
+Eso solo:
+1. Crea la bóveda en `~/Documents/my-vault` si no existe (con todos los archivos del template).
+2. Registra el MCP en Claude Code a nivel **usuario** (disponible en cualquier proyecto).
+3. Pasa la API key y el modelo como env vars del MCP.
+
+Después abrís Claude Code en cualquier folder:
+
+```bash
+claude
+```
 
 ```
 /ingest https://karpathy.medium.com/software-2-0-a64152b37c35
@@ -141,10 +141,14 @@ Aliases aceptados para la key: `GOOGLE_API_KEY`, `GEMINI_APIKEY`, `GOOGLE_GENAI_
 
 ```bash
 the-truth-mcp                       # arranca el server MCP (stdio) — esto usa Claude Code
-the-truth-mcp init <path>           # crea una bóveda nueva
+the-truth-mcp install --vault <p> --key <k> [--model <m>]
+                                    # all-in-one: vault + registro en Claude Code
+the-truth-mcp init <path>           # crea una bóveda nueva (sin registrar)
 the-truth-mcp doctor [<path>]       # verifica setup (env vars, key, vault, salud de Gemini)
 the-truth-mcp --version
 ```
+
+`install` por defecto usa `--scope user`. Si querés instalarlo solo en un proyecto, pasá `--scope project` (genera `.mcp.json` en cwd) o `--scope local` (solo tu copia local del proyecto).
 
 ---
 

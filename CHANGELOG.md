@@ -21,6 +21,7 @@ Primera release pública.
 - Resource MCP `vault://agents` (alias `vault://claude` deprecated).
 - Fallback automático entre modelos Gemini si el primario devuelve errores transitorios (429/5xx). Retry con backoff (2s, 8s, 30s).
 - Inyección de la fecha de hoy en el prompt de Gemini para evitar fechas alucinadas en `front-matter`.
+- Comando `install --vault <path> --key <key> [--model <m>]`: all-in-one que crea el vault si falta y registra el MCP en Claude Code (default scope: user). Reemplaza el flujo `init + claude mcp add` manual.
 - Tolerancia a fallas: si Gemini falla durante `save_info`, el crudo queda guardado igual.
 
 ### Notes
