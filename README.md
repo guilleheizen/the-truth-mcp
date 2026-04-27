@@ -40,6 +40,8 @@ Cada `install*` hace lo mismo:
 2. Registra el MCP en el archivo de config nativo del cliente correspondiente.
 3. Guarda la API key y el modelo en `~/.config/the-truth-mcp/.env` con permisos `600` — **nunca** en el archivo de config del cliente. El secreto vive en un solo lugar y se comparte entre todos los clientes.
 
+> **Bonus — pasá `--with-skills`** y el comando, además de registrar el MCP, instala el framework de skills [`Ar9av/obsidian-wiki`](https://github.com/Ar9av/obsidian-wiki) contra la misma bóveda. Eso te da las operaciones procedurales del patrón LLM Wiki de Karpathy (`wiki-query`, `wiki-lint`, `wiki-update`, `wiki-research`, etc.) ejecutables desde cualquier agente. Ver la sección [Skills de obsidian-wiki](#skills-de-obsidian-wiki-opcional) más abajo.
+
 ### Lo que tenés que ver
 
 ```text
@@ -162,6 +164,47 @@ Para automatizar el groom periódicamente, usá el CLI `the-truth-mcp groom <vau
 
 ---
 
+## Skills de obsidian-wiki (opcional)
+
+Las **tools del MCP** (las 6 de arriba) son las primitivas: leer, escribir, organizar. Para flujos más procedurales — "ingestá esta URL", "auditá el wiki", "sincronizá lo que hay en este proyecto al vault" — el ecosistema tiene un framework skill-based excelente, [`Ar9av/obsidian-wiki`](https://github.com/Ar9av/obsidian-wiki), que implementa el patrón [LLM Wiki de Karpathy](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) faithfully.
+
+Lo bueno: las skills de Ar9av son archivos markdown que cualquier agente lee y ejecuta — Claude Code, Cursor, Codex CLI, Gemini CLI, Windsurf, Copilot, etc. No requieren server adicional. Y corren **sobre la misma bóveda** que maneja `the-truth-mcp` — son capas complementarias, no excluyentes.
+
+### Instalación en una línea
+
+```bash
+the-truth-mcp install-skills --vault ~/Documents/my-vault
+```
+
+Eso clona `Ar9av/obsidian-wiki` en `~/.local/share/obsidian-wiki` (o donde le indiques con `--repo-dir`), pre-escribe su `.env` con tu vault path, y corre `setup.sh` — que simlinkea las 24 skills en todos los agentes que tengas instalados.
+
+Si recién estás arrancando, podés combinar todo en una sola corrida:
+
+```bash
+the-truth-mcp install-claude --vault ~/Documents/my-vault --with-skills
+# (idem para install-codex, install-gemini)
+```
+
+Eso te deja el MCP registrado en tu cliente + las skills de Ar9av activas — listo para usar ambos juntos.
+
+### Cuándo usar qué
+
+| Tarea | Tool del MCP | Skill de Ar9av |
+|---|---|---|
+| Guardar texto/markdown crudo | `save_info` ✓ | `wiki-ingest` ✓ |
+| Guardar una URL fetcheándola | — | `ingest-url` ✓ |
+| Leer una página | `vault_read_page` ✓ | (la skill lee directo del filesystem) |
+| Buscar texto | `vault_search` ✓ | `wiki-query` (con síntesis) ✓ |
+| Reorganizar el wiki | `vault_groom` ✓ (Gemini interno) | `wiki-update` (usa el LLM del cliente) |
+| Health check | — | `wiki-lint` ✓ |
+| Sync un proyecto al vault | — | `wiki-update` ✓ |
+| Investigación temática | — | `wiki-research` ✓ |
+| Exportar el grafo | — | `wiki-export` ✓ |
+
+En resumen: **`the-truth-mcp` te da reorganización automática con Gemini interno** (cuesta API key pero no consume tokens del cliente, una request de 1M de contexto). **Ar9av te da el repertorio completo de operaciones del patrón** ejecutándose con los tokens del agente cliente. Probá los dos y quedate con el que se sienta mejor para tu uso.
+
+---
+
 ## Configuración
 
 El server resuelve las variables en este orden (la primera que tenga valor gana):
@@ -197,12 +240,13 @@ the-truth-mcp init <path>                  # crea una bóveda nueva (sin registr
 the-truth-mcp install-claude --vault <p>   # registra en Claude Code (~/.claude.json)
 the-truth-mcp install-codex  --vault <p>   # registra en Codex CLI (~/.codex/config.toml)
 the-truth-mcp install-gemini --vault <p>   # registra en Gemini CLI (~/.gemini/settings.json)
+the-truth-mcp install-skills --vault <p>   # instala skills de Ar9av/obsidian-wiki (clona + setup)
 the-truth-mcp doctor [<path>]              # verifica setup (env vars, key, vault, salud de Gemini)
 the-truth-mcp groom <path>                 # corre Gemini contra el vault (cron-friendly)
 the-truth-mcp --version
 ```
 
-Las flags compartidas por los tres `install-*` son: `--vault`, `--key` (opcional si la key ya está en tu shell), `--model`, `--name`, `--local`. El comando `install-claude` acepta además `--scope {user,local,project}` para elegir dónde registrar el MCP en Claude Code.
+Las flags compartidas por los tres `install-*` son: `--vault`, `--key` (opcional si la key ya está en tu shell), `--model`, `--name`, `--local`, `--with-skills` (instala también Ar9av/obsidian-wiki en el mismo paso). El comando `install-claude` acepta además `--scope {user,local,project}` para elegir dónde registrar el MCP en Claude Code.
 
 Podés correr varios `install*` contra la misma bóveda — cada cliente tiene su propio archivo de config y la key se comparte vía `~/.config/the-truth-mcp/.env`.
 

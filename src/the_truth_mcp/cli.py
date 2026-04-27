@@ -11,6 +11,8 @@
 `uv run the-truth-mcp run`                → alias explícito del server.
 `uv run the-truth-mcp doctor [<path>]`    → verifica el setup (env vars, key, vault).
 `uv run the-truth-mcp groom <path>`       → corre Gemini contra el vault (cron-friendly).
+`uv run the-truth-mcp install-skills ...` → instala las skills de Ar9av/obsidian-wiki
+                                             contra el vault (clona el repo y corre setup.sh).
 `uv run the-truth-mcp --version`          → imprime la versión.
 """
 
@@ -242,6 +244,112 @@ def groom(vault_path: Path) -> int:
 _GIT_REPO = "git+https://github.com/guilleheizen/the-truth-mcp"
 _USER_CONFIG_DIR = Path.home() / ".config" / "the-truth-mcp"
 _USER_ENV_FILE = _USER_CONFIG_DIR / ".env"
+
+# Ar9av/obsidian-wiki — implementación skill-based fiel del patrón LLM Wiki de
+# Karpathy. Lo integramos como un install opcional para que cualquier agente
+# (Claude Code, Cursor, Codex CLI, Gemini CLI, etc.) tenga las skills procedurales
+# (wiki-query, wiki-lint, wiki-update, …) sobre la misma bóveda que maneja el MCP.
+_OBSIDIAN_WIKI_REPO_URL = "https://github.com/Ar9av/obsidian-wiki.git"
+_DEFAULT_OBSIDIAN_WIKI_DIR = Path.home() / ".local" / "share" / "obsidian-wiki"
+
+
+def install_skills(
+    vault: Path,
+    *,
+    repo_dir: Path | None = None,
+) -> int:
+    """Instala el framework de skills de Ar9av/obsidian-wiki contra el vault.
+
+    Clona (o actualiza) el repo en `repo_dir`, escribe `.env` con el path del
+    vault, y corre `bash setup.sh` para que las skills queden simlinkeadas en
+    todos los agentes que tengas instalados (Claude Code, Codex, Gemini CLI,
+    Cursor, etc.). Idempotente: re-correrlo actualiza el repo y refresca los
+    simlinks.
+    """
+    if shutil.which("git") is None:
+        print(
+            "error: `git` no está en el PATH. Instalá git primero.",
+            file=sys.stderr,
+        )
+        return 1
+    if shutil.which("bash") is None:
+        print(
+            "error: `bash` no está en el PATH. setup.sh requiere bash.",
+            file=sys.stderr,
+        )
+        return 1
+
+    target_vault = vault.expanduser().resolve()
+    if not target_vault.is_dir():
+        print(
+            f"error: el vault no existe: {target_vault}\n"
+            "  Creá el vault primero con `the-truth-mcp init <path>` o "
+            "pasá un path válido.",
+            file=sys.stderr,
+        )
+        return 1
+
+    target_repo = (repo_dir or _DEFAULT_OBSIDIAN_WIKI_DIR).expanduser().resolve()
+
+    if target_repo.exists():
+        if not (target_repo / ".git").is_dir():
+            print(
+                f"error: {target_repo} existe pero no parece un clon de obsidian-wiki "
+                "(falta .git). Borralo o pasá `--repo-dir <otro>`.",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"→ Actualizando obsidian-wiki en {target_repo}")
+        result = subprocess.run(
+            ["git", "-C", str(target_repo), "pull", "--ff-only"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            # No fatal — seguimos con la versión actual y avisamos.
+            print(f"  ⚠  git pull falló (uso versión local): {result.stderr.strip()}")
+    else:
+        print(f"→ Clonando obsidian-wiki en {target_repo}")
+        target_repo.parent.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            ["git", "clone", _OBSIDIAN_WIKI_REPO_URL, str(target_repo)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            print(f"error: git clone falló:\n{result.stderr}", file=sys.stderr)
+            return result.returncode
+
+    # Pre-escribir .env para que setup.sh sea no-interactivo.
+    env_file = target_repo / ".env"
+    env_file.write_text(
+        f'OBSIDIAN_VAULT_PATH="{target_vault}"\n',
+        encoding="utf-8",
+    )
+    print(f"→ {env_file} apunta a {target_vault}")
+
+    print(f"→ Corriendo {target_repo}/setup.sh")
+    result = subprocess.run(
+        ["bash", "setup.sh"],
+        cwd=str(target_repo),
+    )
+    if result.returncode != 0:
+        print(f"error: setup.sh falló (exit {result.returncode})", file=sys.stderr)
+        return result.returncode
+
+    print()
+    print("✓ Skills de obsidian-wiki instaladas en todos los agentes detectados.")
+    print(f"  vault:  {target_vault}")
+    print(f"  repo:   {target_repo}")
+    print(f"  config: ~/.obsidian-wiki/config")
+    print()
+    print("Probalo en cualquier agente (Claude Code, Codex, Gemini CLI, …):")
+    print('  "Set up my wiki"          ← inicializa la estructura del vault')
+    print("  /wiki-query <pregunta>    ← preguntale al wiki")
+    print("  /wiki-update              ← sync del proyecto actual al vault")
+    print("  /wiki-lint                ← health-check del wiki")
+    print("  /ingest-url <url>         ← agregar una fuente web")
+    return 0
 
 
 def _write_user_env(key: str | None, model: str | None) -> Path:
@@ -556,6 +664,7 @@ def install(
     scope: str = "user",
     name: str = "the-truth",
     use_local_path: bool = False,
+    with_skills: bool = False,
 ) -> int:
     """Instala el MCP en Claude Code.
 
@@ -581,6 +690,11 @@ def install(
         client="claude-code", target=target, model=model,
         env_file=env_file, name=name, scope=scope,
     )
+    if with_skills:
+        print()
+        rc_skills = install_skills(vault=target)
+        if rc_skills:
+            return rc_skills
     return 0
 
 
@@ -591,6 +705,7 @@ def install_codex(
     model: str = "gemini-2.5-flash",
     name: str = "the-truth",
     use_local_path: bool = False,
+    with_skills: bool = False,
 ) -> int:
     """Instala el MCP en Codex CLI (OpenAI).
 
@@ -616,6 +731,11 @@ def install_codex(
         client="codex", target=target, model=model,
         env_file=env_file, name=name, scope=None,
     )
+    if with_skills:
+        print()
+        rc_skills = install_skills(vault=target)
+        if rc_skills:
+            return rc_skills
     return 0
 
 
@@ -626,6 +746,7 @@ def install_gemini(
     model: str = "gemini-2.5-flash",
     name: str = "the-truth",
     use_local_path: bool = False,
+    with_skills: bool = False,
 ) -> int:
     """Instala el MCP en Gemini CLI (Google).
 
@@ -650,11 +771,16 @@ def install_gemini(
         client="gemini-cli", target=target, model=model,
         env_file=env_file, name=name, scope=None,
     )
+    if with_skills:
+        print()
+        rc_skills = install_skills(vault=target)
+        if rc_skills:
+            return rc_skills
     return 0
 
 
 def _add_common_install_flags(p: argparse.ArgumentParser) -> None:
-    """Flags compartidas por install / install-codex / install-gemini."""
+    """Flags compartidas por install-claude / install-codex / install-gemini."""
     p.add_argument(
         "--vault",
         required=True,
@@ -684,6 +810,15 @@ def _add_common_install_flags(p: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Usar el código local del repo en lugar de uvx desde GitHub (para desarrollo).",
     )
+    p.add_argument(
+        "--with-skills",
+        action="store_true",
+        help=(
+            "Después del install del MCP, también instala el framework de skills "
+            "de Ar9av/obsidian-wiki contra el mismo vault. Equivale a correr "
+            "`install-skills --vault <vault>` después."
+        ),
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -712,6 +847,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_groom.add_argument("path", help="Ruta del vault a groomear.")
     p_groom.set_defaults(handler="groom")
+
+    p_skills = sub.add_parser(
+        "install-skills",
+        help=(
+            "Instala las skills de Ar9av/obsidian-wiki — un framework skill-based "
+            "que implementa el patrón LLM Wiki de Karpathy. Corre sobre el mismo "
+            "vault que el MCP."
+        ),
+    )
+    p_skills.add_argument(
+        "--vault",
+        required=True,
+        help="Ruta absoluta a la bóveda (la misma que registraste con install-*).",
+    )
+    p_skills.add_argument(
+        "--repo-dir",
+        default=None,
+        help=(
+            f"Dónde clonar el repo de obsidian-wiki "
+            f"(default: {_DEFAULT_OBSIDIAN_WIKI_DIR})."
+        ),
+    )
+    p_skills.set_defaults(handler="install-skills")
 
     # install-claude — Anthropic Claude Code.
     p_inst = sub.add_parser(
@@ -789,6 +947,7 @@ def main(argv: list[str] | None = None) -> int:
             scope=parsed.scope,
             name=parsed.name,
             use_local_path=parsed.local,
+            with_skills=parsed.with_skills,
         )
 
     if handler == "install-codex":
@@ -798,6 +957,7 @@ def main(argv: list[str] | None = None) -> int:
             model=parsed.model,
             name=parsed.name,
             use_local_path=parsed.local,
+            with_skills=parsed.with_skills,
         )
 
     if handler == "install-gemini":
@@ -807,6 +967,13 @@ def main(argv: list[str] | None = None) -> int:
             model=parsed.model,
             name=parsed.name,
             use_local_path=parsed.local,
+            with_skills=parsed.with_skills,
+        )
+
+    if handler == "install-skills":
+        return install_skills(
+            vault=Path(parsed.vault),
+            repo_dir=Path(parsed.repo_dir) if parsed.repo_dir else None,
         )
 
     parser.print_help()
