@@ -17,9 +17,12 @@ from __future__ import annotations
 
 import json
 import os
+import time
+from datetime import date
 from pathlib import Path
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 
 from . import vault
@@ -76,6 +79,12 @@ def _build_user_prompt() -> str:
     Esto cabe holgado en el context de Gemini 2.5 Flash (1M tokens).
     """
     parts: list[str] = []
+
+    parts.append(f"# Fecha de hoy\n\n{date.today().isoformat()}\n\n")
+    parts.append(
+        "Usá esta fecha para los campos `created` y `updated` del front-matter "
+        "de páginas que crees ahora. NO inventes fechas.\n"
+    )
 
     parts.append("# CLAUDE.md (schema vivo)\n")
     try:
@@ -139,28 +148,73 @@ def _client() -> genai.Client:
     return genai.Client(api_key=api_key)
 
 
-def _model() -> str:
-    return os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+def _models() -> list[str]:
+    """Lista priorizada de modelos a intentar — primero el configurado, después fallbacks.
+
+    El usuario puede pasar `GEMINI_MODEL=foo,bar` para fijar fallbacks explícitos.
+    Si pasa solo un modelo, agregamos los fallbacks razonables (dedupeando).
+    """
+    configured = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    primary = [m.strip() for m in configured.split(",") if m.strip()]
+    fallbacks = ["gemini-2.5-flash", "gemini-2.5-pro"]
+    out: list[str] = []
+    for m in primary + fallbacks:
+        if m not in out:
+            out.append(m)
+    return out
 
 
-def propose_plan() -> Plan:
-    """Llama a Gemini y devuelve un Plan estructurado. No aplica nada."""
+# Errores transitorios que justifican reintento (sobrecarga, rate limit, server hiccup).
+_TRANSIENT_STATUSES = {429, 500, 502, 503, 504}
+
+
+def _is_transient(exc: BaseException) -> bool:
+    if isinstance(exc, genai_errors.APIError):
+        return exc.code in _TRANSIENT_STATUSES
+    return False
+
+
+def _generate_with_fallback(client: genai.Client, prompt: str) -> tuple[str, str]:
+    """Intenta generate_content con cada modelo y reintentos. Devuelve (modelo_que_funcionó, texto).
+
+    Estrategia: por cada modelo, hasta 3 intentos con backoff (2s, 8s, 30s).
+    Si los 3 fallan con error transitorio, pasa al siguiente modelo.
+    Si fallan TODOS los modelos, levanta la última excepción.
+    """
+    config = genai_types.GenerateContentConfig(
+        system_instruction=SYSTEM_INSTRUCTION,
+        response_mime_type="application/json",
+        response_schema=Plan,
+        temperature=0.2,
+    )
+    backoffs = [2, 8, 30]
+    last_exc: BaseException | None = None
+
+    for model in _models():
+        for delay in backoffs:
+            try:
+                response = client.models.generate_content(
+                    model=model, contents=prompt, config=config
+                )
+                return model, response.text or ""
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                if not _is_transient(exc):
+                    # Error no transitorio → fallar inmediato, no tiene sentido reintentar.
+                    raise
+                time.sleep(delay)
+        # Todos los retries de este modelo fallaron — pasar al siguiente.
+
+    assert last_exc is not None
+    raise last_exc
+
+
+def propose_plan() -> tuple[str, Plan]:
+    """Llama a Gemini y devuelve (modelo_usado, Plan). No aplica nada."""
     client = _client()
     user_prompt = _build_user_prompt()
-
-    response = client.models.generate_content(
-        model=_model(),
-        contents=user_prompt,
-        config=genai_types.GenerateContentConfig(
-            system_instruction=SYSTEM_INSTRUCTION,
-            response_mime_type="application/json",
-            response_schema=Plan,
-            temperature=0.2,
-        ),
-    )
-
-    text = response.text or ""
-    return Plan.model_validate_json(text)
+    model_used, text = _generate_with_fallback(client, user_prompt)
+    return model_used, Plan.model_validate_json(text)
 
 
 def reorganize(*, dry_run: bool = False) -> tuple[Plan, ApplyResult]:
@@ -168,7 +222,7 @@ def reorganize(*, dry_run: bool = False) -> tuple[Plan, ApplyResult]:
 
     Logea siempre la operación al log.md, sea dry_run o no.
     """
-    plan = propose_plan()
+    model_used, plan = propose_plan()
     result = ApplyResult(dry_run=dry_run)
 
     if dry_run:
@@ -184,7 +238,7 @@ def reorganize(*, dry_run: bool = False) -> tuple[Plan, ApplyResult]:
 
     title = plan.summary.split("\n")[0][:80] if plan.summary else "reorganize"
     body_lines = [
-        f"- modelo: {_model()}",
+        f"- modelo: {model_used}",
         f"- dry_run: {dry_run}",
         f"- operaciones propuestas: {len(plan.operations)}",
         f"- aplicadas: {len(result.applied)}",
