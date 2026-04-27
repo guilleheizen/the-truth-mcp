@@ -96,3 +96,34 @@ class ApplyResult(BaseModel):
     skipped: list[str] = Field(default_factory=list, description="Operaciones saltadas con motivo")
     errors: list[str] = Field(default_factory=list, description="Errores no fatales")
     dry_run: bool = False
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Q&A y búsqueda semántica via Gemini
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class Answer(BaseModel):
+    """Respuesta sintetizada por Gemini a una pregunta sobre la bóveda."""
+
+    answer: str = Field(description="Respuesta sintetizada, en prosa")
+    citations: list[str] = Field(
+        default_factory=list,
+        description="Paths de páginas citadas, ej: 'wiki/conceptos/foo.md'",
+    )
+    confidence: Literal["high", "medium", "low"] = Field(
+        description="Confianza del modelo en la respuesta"
+    )
+
+
+class FindResult(BaseModel):
+    """Una página relevante para un query semántico."""
+
+    slug: str = Field(description="Slug en kebab-case, sin extensión")
+    path: str = Field(description="Ruta relativa a la bóveda")
+    why_relevant: str = Field(description="Una frase explicando por qué es relevante")
+    score: float = Field(ge=0.0, le=1.0, description="Puntaje de relevancia 0..1")
+
+
+class FindResults(BaseModel):
+    results: list[FindResult] = Field(default_factory=list)

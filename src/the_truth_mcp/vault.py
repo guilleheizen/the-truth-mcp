@@ -7,6 +7,7 @@ agente Gemini llaman a estas funciones; nadie escribe directo al disco.
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import os
 import re
 import shutil
@@ -143,6 +144,158 @@ def list_pages(category: str | None = None) -> list[str]:
     return [str(p) for p in pages]
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Front-matter: parser propio (sin PyYAML para no sumar deps).
+# Soporta: strings escalares (con o sin comillas), booleanos, números, y
+# listas YAML del estilo `key:\n  - item\n  - item`. Suficiente para nuestro
+# front-matter — no es un parser YAML general.
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+_FRONT_MATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*(?:\n|\Z)", re.DOTALL)
+
+
+def _coerce_scalar(raw: str) -> object:
+    """Convierte un escalar de YAML simple. Quita comillas, parsea bools/ints/floats."""
+    s = raw.strip()
+    if not s:
+        return ""
+    # Quitar comillas si están balanceadas
+    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+        return s[1:-1]
+    low = s.lower()
+    if low == "true":
+        return True
+    if low == "false":
+        return False
+    if low in ("null", "~"):
+        return None
+    # int / float
+    try:
+        if re.fullmatch(r"-?\d+", s):
+            return int(s)
+        if re.fullmatch(r"-?\d+\.\d+", s):
+            return float(s)
+    except ValueError:  # pragma: no cover (regex ya filtra)
+        pass
+    return s
+
+
+def parse_front_matter(content: str) -> dict:
+    """Parsea el bloque YAML entre `---` y `---` al inicio del contenido.
+
+    Soporta escalares, booleanos, números y listas con `- item`. Si no hay
+    front-matter, devuelve `{}`. No usa PyYAML — diseñado para nuestro
+    front-matter, no como parser general.
+    """
+    m = _FRONT_MATTER_RE.match(content)
+    if not m:
+        return {}
+    body = m.group(1)
+    out: dict[str, object] = {}
+    current_key: str | None = None
+    current_list: list[object] | None = None
+
+    for raw_line in body.splitlines():
+        line = raw_line.rstrip()
+        if not line.strip():
+            continue
+        # Item de lista (indentado con espacios o tab y empezando con `-`)
+        list_match = re.match(r"^[ \t]+-\s+(.*)$", line)
+        if list_match and current_list is not None:
+            current_list.append(_coerce_scalar(list_match.group(1)))
+            continue
+        # Item de lista en el primer nivel también (soportamos `- foo` después de `key:`)
+        first_dash = re.match(r"^-\s+(.*)$", line)
+        if first_dash and current_list is not None:
+            current_list.append(_coerce_scalar(first_dash.group(1)))
+            continue
+        # Línea `key:` o `key: value`
+        kv = re.match(r"^([A-Za-z_][A-Za-z0-9_\-]*):\s*(.*)$", line)
+        if not kv:
+            continue
+        key = kv.group(1).strip()
+        value = kv.group(2)
+        if value.strip() == "":
+            # Empieza una lista (o un dict — para nuestro caso, asumimos lista).
+            current_list = []
+            out[key] = current_list
+            current_key = key
+        else:
+            out[key] = _coerce_scalar(value)
+            current_list = None
+            current_key = key
+    # silenciar lint
+    _ = current_key
+    return out
+
+
+def _strip_front_matter(content: str) -> str:
+    """Devuelve el cuerpo después del bloque de front-matter inicial.
+
+    Si no hay front-matter, devuelve el contenido sin tocar.
+    """
+    m = _FRONT_MATTER_RE.match(content)
+    if not m:
+        return content
+    return content[m.end():]
+
+
+def _content_hash(content: str) -> str:
+    """SHA-256 hex del cuerpo (sin front-matter), normalizado (strip)."""
+    body = _strip_front_matter(content).strip()
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def list_pages_detailed(category: str | None = None) -> list[dict]:
+    """Igual que `list_pages` pero devuelve metadata parseada del front-matter.
+
+    Cada entrada: `{path, title, summary, tags, sources, related}`. Los campos
+    que no estén en el front-matter quedan como `None` (escalares) o `[]`
+    (listas).
+    """
+    root = vault_root()
+    out: list[dict] = []
+    for rel in list_pages(category=category):
+        try:
+            text = (root / rel).read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        fm = parse_front_matter(text)
+        out.append({
+            "path": rel,
+            "title": fm.get("title"),
+            "summary": fm.get("summary"),
+            "tags": fm.get("tags") or [],
+            "sources": fm.get("sources") or [],
+            "related": fm.get("related") or [],
+        })
+    return out
+
+
+def is_pinned(path_or_resolved: Path | str) -> bool:
+    """True si el archivo tiene `pinned: true` en su front-matter.
+
+    Acepta `Path` absoluto o ruta relativa al vault. Si el archivo no existe
+    o no tiene front-matter, devuelve False.
+    """
+    if isinstance(path_or_resolved, str):
+        try:
+            target = _safe_path(path_or_resolved)
+        except ValueError:
+            return False
+    else:
+        target = path_or_resolved
+    if not target.is_file():
+        return False
+    try:
+        text = target.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        return False
+    fm = parse_front_matter(text)
+    return bool(fm.get("pinned") is True)
+
+
 def read_page(slug_or_path: str) -> str:
     """Lee el contenido completo de una página."""
     return _resolve_slug(slug_or_path).read_text(encoding="utf-8")
@@ -276,6 +429,59 @@ def vault_status() -> dict[str, object]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Parser del log (recientes)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+_LOG_HEADING_RE = re.compile(
+    r"^##\s+\[(?P<date>\d{4}-\d{2}-\d{2})\]\s+(?P<type>\S+)\s*\|\s*(?P<title>.+?)\s*$",
+    re.MULTILINE,
+)
+
+
+def parse_log_entries(text: str) -> list[dict]:
+    """Parsea entradas del log. Cada entrada empieza con `## [YYYY-MM-DD] tipo | titulo`.
+
+    Devuelve una lista de `{date, type, title, body}` en el orden en que aparecen.
+    `body` es el texto entre el heading y el siguiente (sin incluir headings).
+    """
+    headings = list(_LOG_HEADING_RE.finditer(text))
+    entries: list[dict] = []
+    for i, h in enumerate(headings):
+        body_start = h.end()
+        body_end = headings[i + 1].start() if i + 1 < len(headings) else len(text)
+        body = text[body_start:body_end].strip("\n")
+        entries.append({
+            "date": h.group("date"),
+            "type": h.group("type"),
+            "title": h.group("title").strip(),
+            "body": body,
+        })
+    return entries
+
+
+def recent_entries(since: str | None = None, limit: int = 20) -> list[dict]:
+    """Devuelve las últimas entradas del log, opcionalmente filtradas por fecha.
+
+    `since` es ISO `YYYY-MM-DD` (inclusive). `limit` recorta el resultado al
+    final del orden descendente por fecha.
+    """
+    log_path = vault_root() / "log.md"
+    if not log_path.is_file():
+        return []
+    text = log_path.read_text(encoding="utf-8")
+    entries = parse_log_entries(text)
+    if since:
+        entries = [e for e in entries if e["date"] >= since]
+    # Orden descendente por fecha (estable: si empatan fechas, conserva orden de
+    # aparición — los más recientes en el archivo quedan primero).
+    entries.sort(key=lambda e: e["date"], reverse=True)
+    if limit > 0:
+        entries = entries[:limit]
+    return entries
+
+
 def append_log(event_type: str, title: str, body: str | None = None) -> str:
     """Apendea entrada al log. Retorna la línea de heading que escribió."""
     valid = {"ingest", "query", "lint", "refactor", "init", "reorganize"}
@@ -304,20 +510,78 @@ def slugify(title: str) -> str:
     return base or "untitled"
 
 
+_CONTENT_HASH_RE = re.compile(r"(?m)^content_hash:\s*([0-9a-f]{64})\s*$")
+
+
+def _find_raw_by_hash(hash_hex: str) -> str | None:
+    """Busca un raw cuyo front-matter declare `content_hash: <hash_hex>`.
+
+    No relee el cuerpo de cada raw — solo escanea el front-matter. Esto
+    mantiene el dedup barato. Raws viejos sin `content_hash` no se detectan
+    como duplicados (es OK, no rompemos nada).
+    """
+    root = vault_root()
+    raw_dir = root / "raw"
+    if not raw_dir.is_dir():
+        return None
+    for p in sorted(raw_dir.glob("*.md")):
+        try:
+            text = p.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        m = _FRONT_MATTER_RE.match(text)
+        if not m:
+            continue
+        hm = _CONTENT_HASH_RE.search(m.group(1))
+        if hm and hm.group(1) == hash_hex:
+            return str(p.relative_to(root))
+    return None
+
+
+def _build_raw_front_matter(
+    *,
+    title: str | None,
+    source: str | None,
+    content_hash: str,
+) -> str:
+    """Construye un bloque de front-matter para raws nuevos."""
+    today = date.today().isoformat()
+    lines = ["---", f"fetched: {today}"]
+    if title:
+        lines.append(f'title: "{title}"')
+    if source:
+        lines.append(f"source: {source}")
+    lines.append(f"content_hash: {content_hash}")
+    lines.append("---")
+    return "\n".join(lines) + "\n\n"
+
+
 def add_to_raw(
     content: str,
     *,
     slug: str | None = None,
     title: str | None = None,
     source: str | None = None,
-) -> str:
-    """Guarda contenido nuevo en raw/<slug>.md.
+) -> dict:
+    """Guarda contenido nuevo en raw/<slug>.md, con dedup por hash de contenido.
 
     Es la única vía por la que entra info nueva a la bóveda. No procesa, no
-    analiza. Si ya existe el archivo, falla — no sobrescribe (raw es sagrado).
+    analiza. Si ya existe un raw con el mismo hash de contenido, NO escribe
+    nada y devuelve el path existente (flag `deduplicated: True`).
+
+    Returns: dict con
+      - `path`: ruta relativa al raw (recién creado o duplicado preexistente).
+      - `deduplicated`: True si se detectó un duplicado y no se escribió nada.
     """
     if not slug and not title:
         raise ValueError("Necesito al menos `slug` o `title` para nombrar el archivo")
+
+    # Dedup por hash del cuerpo (ignorando front-matter, normalizado).
+    hash_hex = _content_hash(content)
+    existing = _find_raw_by_hash(hash_hex)
+    if existing is not None:
+        return {"path": existing, "deduplicated": True}
+
     # Siempre normalizamos el slug — incluso si lo pasó el usuario. Esto
     # neutraliza separadores de ruta (`../`, `/`) que de otro modo permitirían
     # que un slug malicioso escape de `raw/` aún quedando dentro del vault.
@@ -334,19 +598,77 @@ def add_to_raw(
         raise FileExistsError(f"raw/{final_slug}.md ya existe — raw es inmutable")
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    # Si no hay front-matter, lo agregamos
+    # Si no hay front-matter, lo agregamos (con content_hash incluido).
+    # Si lo hay, lo respetamos pero igual queremos `content_hash` para que el
+    # próximo dedup nos detecte. Inyectamos la línea dentro del bloque existente.
     if not content.lstrip().startswith("---"):
-        today = date.today().isoformat()
-        fm_lines = ["---", f"fetched: {today}"]
-        if title:
-            fm_lines.append(f'title: "{title}"')
-        if source:
-            fm_lines.append(f"source: {source}")
-        fm_lines.append("---")
-        content = "\n".join(fm_lines) + "\n\n" + content
+        content = _build_raw_front_matter(
+            title=title, source=source, content_hash=hash_hex
+        ) + content
+    else:
+        m = _FRONT_MATTER_RE.match(content)
+        if m and "content_hash:" not in m.group(1):
+            inner = m.group(1).rstrip() + f"\ncontent_hash: {hash_hex}\n"
+            body = content[m.end():]
+            # Aseguramos al menos una línea en blanco entre el front-matter y
+            # el cuerpo (si la había en el original, igual queda una sola
+            # — no nos ponemos paranoicos con el formato exacto).
+            content = f"---\n{inner}---\n\n" + body.lstrip("\n")
 
     target.write_text(content, encoding="utf-8")
-    return str(target.relative_to(vault_root()))
+    return {
+        "path": str(target.relative_to(vault_root())),
+        "deduplicated": False,
+    }
+
+
+def replace_raw(
+    slug: str,
+    new_content: str,
+    *,
+    source: str | None = None,
+) -> dict:
+    """Versiona el raw existente y escribe el nuevo en `raw/<slug>.md`.
+
+    El raw debe existir; si no, levanta `FileNotFoundError`. Mueve el actual a
+    `raw/<slug>-vN.md` (donde N es el primer número libre desde 2) y escribe
+    el nuevo contenido en `raw/<slug>.md`. Devuelve `{current, archived}`.
+    """
+    final_slug = slugify(slug)
+    current = _safe_path(f"raw/{final_slug}.md")
+    if not current.exists():
+        raise FileNotFoundError(f"No existe raw/{final_slug}.md para reemplazar")
+
+    # Encontrar el siguiente número libre: -v2, -v3, ...
+    n = 2
+    while True:
+        archived = _safe_path(f"raw/{final_slug}-v{n}.md")
+        if not archived.exists():
+            break
+        n += 1
+
+    shutil.move(str(current), str(archived))
+
+    # Escribir el nuevo contenido reusando la lógica de add_to_raw para el
+    # front-matter (incluye content_hash).
+    hash_hex = _content_hash(new_content)
+    if not new_content.lstrip().startswith("---"):
+        new_content = _build_raw_front_matter(
+            title=None, source=source, content_hash=hash_hex
+        ) + new_content
+    else:
+        m = _FRONT_MATTER_RE.match(new_content)
+        if m and "content_hash:" not in m.group(1):
+            inner = m.group(1).rstrip() + f"\ncontent_hash: {hash_hex}\n"
+            body = new_content[m.end():]
+            new_content = f"---\n{inner}---\n\n" + body.lstrip("\n")
+
+    current.write_text(new_content, encoding="utf-8")
+    root = vault_root()
+    return {
+        "current": str(current.relative_to(root)),
+        "archived": str(archived.relative_to(root)),
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -359,6 +681,20 @@ def _ensure_under_wiki(rel_path: str) -> Path:
     if not rel_path.startswith("wiki/"):
         raise ValueError(f"Solo se puede escribir bajo wiki/: {rel_path}")
     return _safe_path(rel_path)
+
+
+def _check_not_pinned(rel_path: str, op_type: str) -> None:
+    """Levanta ValueError si la página está pineada.
+
+    Usado por las operaciones destructivas (update, delete, rename, merge,
+    split). `add_link` no llama esto porque está permitida sobre páginas
+    pineadas.
+    """
+    target = _safe_path(rel_path)
+    if is_pinned(target):
+        raise ValueError(
+            f"Página pineada, operación {op_type} bloqueada: {rel_path}"
+        )
 
 
 def apply_operation(op: Operation) -> str:
@@ -378,6 +714,7 @@ def apply_operation(op: Operation) -> str:
         target = _ensure_under_wiki(op.path)
         if not target.exists():
             raise FileNotFoundError(f"No existe: {op.path}")
+        _check_not_pinned(op.path, "update_page")
         target.write_text(op.content, encoding="utf-8")
         return f"updated {op.path}"
 
@@ -385,6 +722,7 @@ def apply_operation(op: Operation) -> str:
         target = _ensure_under_wiki(op.path)
         if not target.exists():
             return f"skipped delete (no existe): {op.path}"
+        _check_not_pinned(op.path, "delete_page")
         target.unlink()
         return f"deleted {op.path}"
 
@@ -395,12 +733,23 @@ def apply_operation(op: Operation) -> str:
             raise FileNotFoundError(f"No existe: {op.from_path}")
         if dst.exists():
             raise FileExistsError(f"Destino ya existe: {op.to_path}")
+        _check_not_pinned(op.from_path, "rename_page")
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(src), str(dst))
         return f"renamed {op.from_path} → {op.to_path}"
 
     if isinstance(op, MergePages):
         into = _ensure_under_wiki(op.into_path)
+        # Si la destino existe y está pineada, no podemos sobrescribirla.
+        if into.exists():
+            _check_not_pinned(op.into_path, "merge_pages")
+        # Ninguno de los origenes puede estar pineado.
+        for src_path in op.from_paths:
+            if src_path == op.into_path:
+                continue
+            src_check = _ensure_under_wiki(src_path)
+            if src_check.exists():
+                _check_not_pinned(src_path, "merge_pages")
         into.parent.mkdir(parents=True, exist_ok=True)
         into.write_text(op.merged_content, encoding="utf-8")
         deleted = []
@@ -417,6 +766,7 @@ def apply_operation(op: Operation) -> str:
         src = _ensure_under_wiki(op.from_path)
         if not src.exists():
             raise FileNotFoundError(f"No existe: {op.from_path}")
+        _check_not_pinned(op.from_path, "split_page")
         created = []
         for new_page in op.new_pages:
             target = _ensure_under_wiki(new_page.path)

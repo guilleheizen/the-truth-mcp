@@ -25,9 +25,10 @@ from pathlib import Path
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types as genai_types
+from pydantic import BaseModel, ValidationError
 
 from . import vault
-from .schemas import ApplyResult, Plan
+from .schemas import Answer, ApplyResult, FindResults, Plan
 
 
 SYSTEM_INSTRUCTION = """\
@@ -69,8 +70,32 @@ Reglas duras (estas no se negocian):
 - Si un raw está pendiente, prioridad #1: crear las páginas que reflejen su contenido.
 - Si encontrás info duplicada o contradictoria entre páginas, proponé `merge_pages`.
 - Sé conservador: mejor 5 operaciones bien justificadas que 30 ruidosas.
+- Páginas con `pinned: true` en su front-matter están protegidas: no proponer
+  operaciones `update_page`, `delete_page`, `rename_page`, `merge_pages` ni
+  `split_page` sobre ellas. Solo `add_link` está permitido.
 
 Tu output debe ser JSON válido conforme al schema Plan que te proveen.
+"""
+
+
+ANSWER_SYSTEM_INSTRUCTION = """\
+Sos un asistente que responde preguntas sobre el contenido de una bóveda
+LLM Wiki. Respondé con citas. Si no hay información suficiente en la bóveda,
+decilo explícitamente y sugerí qué guardar (qué fuente faltaría) en lugar de
+inventar.
+
+Citas: cada cita debe ser un path relativo (ej. `wiki/conceptos/foo.md`).
+Confianza: `high` si la respuesta sale literal de las páginas; `medium` si
+tuviste que inferir desde varias páginas; `low` si la bóveda no cubre bien la
+pregunta.
+"""
+
+
+FIND_SYSTEM_INSTRUCTION = """\
+Sos un buscador semántico sobre una bóveda LLM Wiki. Dado un query, devolvé
+las top-K páginas más relevantes con un puntaje 0..1 y una breve explicación
+de por qué son relevantes. Trabajás solo con metadata (path, title, summary)
+de las páginas — no tenés el contenido completo, así que basate en eso.
 """
 
 
@@ -178,7 +203,14 @@ def _is_transient(exc: BaseException) -> bool:
     return False
 
 
-def _generate_with_fallback(client: genai.Client, prompt: str) -> tuple[str, str]:
+def _generate_with_fallback(
+    client: genai.Client,
+    prompt: str,
+    *,
+    system_instruction: str = SYSTEM_INSTRUCTION,
+    response_schema: type[BaseModel] = Plan,
+    temperature: float = 0.2,
+) -> tuple[str, str]:
     """Intenta generate_content con cada modelo y reintentos. Devuelve (modelo_que_funcionó, texto).
 
     Estrategia: por cada modelo, hasta 3 intentos con backoff (2s, 8s, 30s).
@@ -186,10 +218,10 @@ def _generate_with_fallback(client: genai.Client, prompt: str) -> tuple[str, str
     Si fallan TODOS los modelos, levanta la última excepción.
     """
     config = genai_types.GenerateContentConfig(
-        system_instruction=SYSTEM_INSTRUCTION,
+        system_instruction=system_instruction,
         response_mime_type="application/json",
-        response_schema=Plan,
-        temperature=0.2,
+        response_schema=response_schema,
+        temperature=temperature,
     )
     backoffs = [2, 8, 30]
     last_exc: BaseException | None = None
@@ -219,6 +251,133 @@ def propose_plan() -> tuple[str, Plan]:
     user_prompt = _build_user_prompt()
     model_used, text = _generate_with_fallback(client, user_prompt)
     return model_used, Plan.model_validate_json(text)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Q&A: vault_answer
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _build_answer_prompt(question: str) -> str:
+    """Empaqueta la pregunta + el wiki entero + listado de raws (sin contenido).
+
+    Los raws van por path solamente: para responder, lo importante es saber qué
+    fuentes existen (por si hace falta sugerir leer una en particular). Mandar
+    todo el contenido de raws explotaría el prompt sin aportar mucho.
+    """
+    parts: list[str] = []
+    parts.append(f"# Pregunta\n\n{question}\n\n")
+
+    parts.append("# wiki/ — contenido completo\n")
+    root = vault.vault_root()
+    pages = vault.list_pages()
+    if not pages:
+        parts.append("_(vacío)_\n")
+    for rel in pages:
+        try:
+            content = (root / rel).read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        parts.append(f"\n## `{rel}`\n\n```markdown\n{content}\n```\n")
+
+    parts.append("\n# raw/ — fuentes disponibles (solo paths)\n")
+    raw_files = vault.list_raw()
+    if not raw_files:
+        parts.append("_(vacío)_\n")
+    else:
+        for rel in raw_files:
+            parts.append(f"- {rel}\n")
+
+    parts.append(
+        "\n---\n\nRespondé la pregunta con el schema Answer. Citá los paths de "
+        "las páginas que usaste. Si la bóveda no tiene info suficiente, "
+        "decilo y sugerí qué guardar.\n"
+    )
+    return "".join(parts)
+
+
+def answer_question(question: str) -> tuple[str, Answer]:
+    """Pregunta sobre la bóveda. Devuelve (modelo_usado, Answer)."""
+    client = _client()
+    prompt = _build_answer_prompt(question)
+    model_used, text = _generate_with_fallback(
+        client,
+        prompt,
+        system_instruction=ANSWER_SYSTEM_INSTRUCTION,
+        response_schema=Answer,
+        temperature=0.3,
+    )
+    return model_used, Answer.model_validate_json(text)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Búsqueda semántica: vault_find
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _build_find_prompt(query: str, k: int) -> str:
+    """Listado de páginas (path/title/summary) + query. Sin contenido completo."""
+    parts: list[str] = []
+    parts.append(f"# Query\n\n{query}\n\n")
+    parts.append(f"# Top-K solicitado\n\n{k}\n\n")
+    parts.append("# Páginas disponibles\n\n")
+    detailed = vault.list_pages_detailed()
+    if not detailed:
+        parts.append("_(la bóveda no tiene páginas)_\n")
+    for d in detailed:
+        title = d.get("title") or "(sin título)"
+        summary = d.get("summary") or "(sin resumen)"
+        parts.append(f"- path: `{d['path']}` | title: {title} | summary: {summary}\n")
+    parts.append(
+        f"\n---\n\nDevolvé las top {k} páginas más relevantes para el query. "
+        "Cada resultado: slug (sin extensión), path, why_relevant (1 frase), "
+        "score 0..1.\n"
+    )
+    return "".join(parts)
+
+
+def find_pages(query: str, k: int = 5) -> tuple[str, FindResults]:
+    """Búsqueda semántica via Gemini. Devuelve (modelo_usado, FindResults)."""
+    client = _client()
+    prompt = _build_find_prompt(query, k)
+    model_used, text = _generate_with_fallback(
+        client,
+        prompt,
+        system_instruction=FIND_SYSTEM_INSTRUCTION,
+        response_schema=FindResults,
+        temperature=0.2,
+    )
+    results = FindResults.model_validate_json(text)
+    # Truncar al k pedido por si el modelo se pasó.
+    results.results = results.results[:k]
+    return model_used, results
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Clasificación de errores estructurada
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _classify_error(exc: BaseException) -> dict:
+    """Clasifica una excepción de Gemini/Pydantic a un dict estructurado.
+
+    Devuelve `{type, message, retry_after}`. `type` es uno de:
+    `rate_limit`, `auth`, `transient`, `schema`, `unknown`. `retry_after` es
+    segundos sugeridos antes de reintentar (o None si no aplica).
+    """
+    if isinstance(exc, genai_errors.APIError):
+        code = exc.code
+        msg = str(exc)
+        if code == 429:
+            return {"type": "rate_limit", "message": msg, "retry_after": 60}
+        if code in (401, 403):
+            return {"type": "auth", "message": msg, "retry_after": None}
+        if code in (500, 502, 503, 504):
+            return {"type": "transient", "message": msg, "retry_after": 30}
+        return {"type": "unknown", "message": msg, "retry_after": None}
+    if isinstance(exc, ValidationError):
+        return {"type": "schema", "message": str(exc), "retry_after": None}
+    return {"type": "unknown", "message": str(exc), "retry_after": None}
 
 
 def reorganize(*, dry_run: bool = False) -> tuple[Plan, ApplyResult]:

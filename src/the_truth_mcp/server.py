@@ -83,9 +83,82 @@ def vault_list_pages(
         str | None,
         Field(description="Filtrar por categoría: 'conceptos', 'personas', 'papers', o None"),
     ] = None,
-) -> list[str]:
-    """Lista las páginas de wiki/ (paths relativos a la bóveda)."""
+    include_metadata: Annotated[
+        bool,
+        Field(
+            description=(
+                "Si True, devuelve dicts con front-matter parseado "
+                "(`path`, `title`, `summary`, `tags`, `sources`, `related`) en vez "
+                "de solo paths. Default: False (compatibilidad)."
+            )
+        ),
+    ] = False,
+) -> list:
+    """Lista las páginas de wiki/. Por default devuelve paths; con `include_metadata`
+    devuelve dicts con front-matter parseado.
+    """
+    if include_metadata:
+        return vault.list_pages_detailed(category=category)
     return vault.list_pages(category=category)
+
+
+@mcp.tool()
+def vault_answer(
+    question: Annotated[str, Field(description="Pregunta en lenguaje natural sobre la bóveda")],
+) -> dict:
+    """Responde una pregunta sintetizando el contenido del wiki via Gemini.
+
+    Devuelve `{answer, citations, confidence, model_used}`. Si Gemini falla,
+    devuelve `{gemini_error: {...}}` estructurado.
+    """
+    try:
+        model_used, ans = gemini_agent.answer_question(question)
+        return {
+            "answer": ans.answer,
+            "citations": ans.citations,
+            "confidence": ans.confidence,
+            "model_used": model_used,
+        }
+    except Exception as e:  # noqa: BLE001
+        return {"gemini_error": gemini_agent._classify_error(e)}
+
+
+@mcp.tool()
+def vault_find(
+    query: Annotated[str, Field(description="Query semántico — qué buscás")],
+    k: Annotated[int, Field(description="Cantidad máxima de resultados", ge=1, le=20)] = 5,
+) -> dict:
+    """Búsqueda semántica via Gemini. Devuelve top-K páginas con explicación.
+
+    Devuelve `{results: [...], model_used}`. Si Gemini falla, devuelve
+    `{gemini_error: {...}}` estructurado.
+    """
+    try:
+        model_used, found = gemini_agent.find_pages(query, k=k)
+        return {
+            "results": [r.model_dump() for r in found.results],
+            "model_used": model_used,
+        }
+    except Exception as e:  # noqa: BLE001
+        return {"gemini_error": gemini_agent._classify_error(e)}
+
+
+@mcp.tool()
+def vault_recent(
+    since: Annotated[
+        str | None,
+        Field(description="Fecha ISO YYYY-MM-DD (inclusive). Si None, no filtra."),
+    ] = None,
+    limit: Annotated[
+        int,
+        Field(description="Máximo de entradas a devolver", ge=1, le=200),
+    ] = 20,
+) -> list[dict]:
+    """Devuelve entradas recientes del log.md parseadas (orden descendente por fecha).
+
+    Cada entrada: `{date, type, title, body}`.
+    """
+    return vault.recent_entries(since=since, limit=limit)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -144,18 +217,33 @@ def save_info(
     """
     try:
         with vault.vault_lock():
-            raw_path = vault.add_to_raw(content, slug=slug, title=title, source=source)
+            raw_result = vault.add_to_raw(content, slug=slug, title=title, source=source)
+            raw_path = raw_result["path"]
+            deduplicated = bool(raw_result.get("deduplicated"))
+
             vault.append_log(
                 "ingest",
-                f"save_info {raw_path}",
+                f"save_info {raw_path}" + (" (dedup)" if deduplicated else ""),
                 body=(
                     f"- archivo: {raw_path}\n"
                     f"- source: {source or '(no especificado)'}\n"
-                    f"- defer_groom: {defer_groom}"
+                    f"- defer_groom: {defer_groom}\n"
+                    f"- deduplicated: {deduplicated}"
                 ),
             )
 
             response: dict = {"saved_at": raw_path}
+
+            # Si se detectó duplicado, NO disparamos groom: nada nuevo entró al
+            # vault, no hay nada que reorganizar.
+            if deduplicated:
+                response["deduplicated"] = True
+                response["existing_path"] = raw_path
+                response["hint"] = (
+                    "Ya había un raw con el mismo contenido (matcheado por hash). "
+                    "No se escribió ni se reorganizó nada."
+                )
+                return response
 
             if defer_groom:
                 response["deferred"] = True
@@ -170,11 +258,8 @@ def save_info(
                 response["operations_applied"] = result.applied
                 if result.errors:
                     response["gemini_errors"] = result.errors
-            except Exception as e:
-                response["gemini_error"] = (
-                    f"El bibliotecario falló: {e}. La fuente quedó guardada en raw/, pero wiki/ no se actualizó. "
-                    "Podés reintentar después corriendo `vault_groom` (ej. cuando vuelvas a tener red o renueves la API key)."
-                )
+            except Exception as e:  # noqa: BLE001
+                response["gemini_error"] = gemini_agent._classify_error(e)
 
             return response
     except TimeoutError as e:
@@ -182,7 +267,17 @@ def save_info(
 
 
 @mcp.tool()
-def vault_groom() -> dict:
+def vault_groom(
+    dry_run: Annotated[
+        bool,
+        Field(
+            description=(
+                "Si True, Gemini propone el plan pero NO lo aplica. Útil para "
+                "auditar qué haría antes de tocar el vault. Default: False."
+            )
+        ),
+    ] = False,
+) -> dict:
     """Pide a Gemini que reorganice `wiki/` ahora.
 
     Cuándo usar esta tool:
@@ -208,28 +303,86 @@ def vault_groom() -> dict:
       - `operations_applied`: lista de operaciones aplicadas (ej.
         `"created wiki/foo.md"`, `"merged [a,b] → c"`). Vacía si no hubo nada
         que hacer.
+      - `dry_run`: True/False (refleja el parámetro).
       - `errors`: errores no fatales por operación (si los hubo).
-      - `error`: string si no se pudo adquirir el lock o Gemini falló.
+      - `gemini_error`: dict estructurado si Gemini falló.
+      - `error`: string si no se pudo adquirir el lock.
     """
     try:
         with vault.vault_lock():
             try:
-                plan, result = gemini_agent.reorganize(dry_run=False)
-            except Exception as e:
-                return {
-                    "error": (
-                        f"El bibliotecario falló: {e}. La bóveda no se modificó. "
-                        "Reintentá cuando vuelvas a tener red o renueves la API key."
-                    )
-                }
+                plan, result = gemini_agent.reorganize(dry_run=dry_run)
+            except Exception as e:  # noqa: BLE001
+                return {"gemini_error": gemini_agent._classify_error(e)}
             response: dict = {
                 "summary": plan.summary,
                 "operations_applied": result.applied,
+                "dry_run": dry_run,
             }
             if result.errors:
                 response["errors"] = result.errors
             return response
     except TimeoutError as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def vault_replace_raw(
+    slug: Annotated[str, Field(description="Slug del raw existente a reemplazar")],
+    new_content: Annotated[str, Field(description="Contenido nuevo (markdown crudo)")],
+    source: Annotated[
+        str | None,
+        Field(description="URL o referencia de origen para el front-matter del nuevo."),
+    ] = None,
+    defer_groom: Annotated[
+        bool,
+        Field(
+            description=(
+                "Si True, NO dispara a Gemini — solo versiona el raw y vuelve. "
+                "Default: False (groom inmediato)."
+            )
+        ),
+    ] = False,
+) -> dict:
+    """Versiona el raw existente y escribe el nuevo en `raw/<slug>.md`.
+
+    El raw actual se mueve a `raw/<slug>-vN.md` (siguiente número libre).
+    Returns: `{current, archived, ...}` y opcional `gemini_*` si no se difirió.
+    """
+    try:
+        with vault.vault_lock():
+            result = vault.replace_raw(slug, new_content, source=source)
+            vault.append_log(
+                "ingest",
+                f"vault_replace_raw {result['current']}",
+                body=(
+                    f"- nuevo: {result['current']}\n"
+                    f"- archivado: {result['archived']}\n"
+                    f"- source: {source or '(no especificado)'}\n"
+                    f"- defer_groom: {defer_groom}"
+                ),
+            )
+            response: dict = dict(result)
+
+            if defer_groom:
+                response["deferred"] = True
+                response["hint"] = (
+                    "wiki/ no se actualizó. Llamá `vault_groom` cuando termines el batch."
+                )
+                return response
+
+            try:
+                plan, applied = gemini_agent.reorganize(dry_run=False)
+                response["gemini_summary"] = plan.summary
+                response["operations_applied"] = applied.applied
+                if applied.errors:
+                    response["gemini_errors"] = applied.errors
+            except Exception as e:  # noqa: BLE001
+                response["gemini_error"] = gemini_agent._classify_error(e)
+            return response
+    except TimeoutError as e:
+        return {"error": str(e)}
+    except FileNotFoundError as e:
         return {"error": str(e)}
 
 
