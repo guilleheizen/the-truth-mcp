@@ -40,6 +40,22 @@ Cada `install*` hace lo mismo:
 2. Registra el MCP en el archivo de config nativo del cliente correspondiente.
 3. Guarda la API key y el modelo en `~/.config/the-truth-mcp/.env` con permisos `600` — **nunca** en el archivo de config del cliente. El secreto vive en un solo lugar y se comparte entre todos los clientes.
 
+### Lo que tenés que ver
+
+```text
+→ Bóveda existente detectada en /Users/.../my-vault
+→ Usando API key de tu shell ($GEMINI_APIKEY). Modelo guardado en ~/.config/the-truth-mcp/.env.
+→ Registrando MCP `the-truth` en Claude Code (scope user)
+
+✓ MCP `the-truth` instalado en claude-code.
+  vault:  /Users/.../my-vault
+  modelo: gemini-2.5-flash
+  scope:  user
+  config: ~/.config/the-truth-mcp/.env (key + modelo del bibliotecario)
+```
+
+Si ves un `✗` en cualquier paso, corré `the-truth-mcp doctor /Users/.../my-vault` para diagnosticar.
+
 > **Si ya tenés `GEMINI_API_KEY` exportada en tu shell** (zshrc/bashrc), podés omitir `--key`. El server lee primero del entorno y solo cae al `.env` global si no encuentra nada — el shell siempre gana.
 
 Después abrís el cliente apuntando al vault y usás las tools del MCP (`save_info`, `vault_search`, `vault_read_page`, `vault_list_pages`).
@@ -145,6 +161,10 @@ El server resuelve las variables en este orden (la primera que tenga valor gana)
 
 Aliases aceptados para la key: `GOOGLE_API_KEY`, `GEMINI_APIKEY`, `GOOGLE_GENAI_API_KEY`.
 
+### Free tier de Gemini — qué esperar
+
+El [tier gratis de Google AI Studio](https://aistudio.google.com/apikey) tiene rate limits modestos (alrededor de 15 requests por minuto en `gemini-2.5-flash`, con cuota diaria). Para uso normal — guardar 1–2 docs por minuto — alcanza sobrado. Si hacés ráfagas de `save_info` muy seguidas vas a recibir 429s; el server reintenta automáticamente con backoff (2s, 8s, 30s) y cae a `gemini-2.5-pro` como fallback. Si hacés ingestas grandes con frecuencia, considerá pagar el tier de Google AI Studio o cambiar a Vertex AI.
+
 ### Por qué la key vive en `~/.config/the-truth-mcp/.env` y no en el config del cliente
 
 Los archivos de config de los clientes MCP (`~/.claude.json`, `~/.codex/config.toml`, `~/.gemini/settings.json`) son archivos que: a) los abren apps GUI sin pasar por tu shell, b) la gente comparte o sube a repos por error, c) no tienen permisos restrictivos. Guardar la API key ahí en texto plano es un footgun. La config global del MCP vive en su propio archivo con `chmod 600`, es cargada solo por el server, y se comparte entre todos los clientes — instalá en tres herramientas distintas y la key sigue en un único lugar.
@@ -208,11 +228,35 @@ src/the_truth_mcp/
 
 ## Limitaciones conocidas
 
-- **Sin retry automático**: si Gemini falla durante `save_info`, el crudo queda en `raw/` pero `wiki/` no se actualiza hasta el próximo `save_info`. La info no se pierde.
+- **Retry limitado**: el server reintenta errores transitorios de Gemini (429/5xx) con backoff (2s, 8s, 30s) y cae a `gemini-2.5-pro` como fallback. Si igual falla — sin red, key vencida — el crudo queda en `raw/` y `wiki/` no se actualiza hasta el próximo `save_info`. La info no se pierde.
 - **One-shot, no agent loop**: Gemini emite un único Plan por invocación. Para bóvedas muy grandes (>500k tokens de contenido) puede ser limitante.
 - **`log.md` no se compacta**: append-only, crece indefinido.
 
 PRs bienvenidos para cualquiera de estos.
+
+---
+
+## Troubleshooting
+
+### `Gemini responde 503` o `429`
+
+Rate limit o sobrecarga upstream. El server reintenta automáticamente con backoff. Re-corré `save_info` en un minuto. Si persiste, probá `GEMINI_MODEL=gemini-2.5-pro` para pegarle a un modelo menos cargado.
+
+### `No encuentro la API key de Gemini`
+
+El server chequeó los cuatro alias de entorno (`GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GEMINI_APIKEY`, `GOOGLE_GENAI_API_KEY`) y no encontró ninguno, y `~/.config/the-truth-mcp/.env` está vacío o no existe. Fix: re-corré `the-truth-mcp install-claude --vault <path> --key <key>`, o `export GEMINI_API_KEY=...` en tu shell rc.
+
+### `El path de la bóveda apunta a un directorio inexistente`
+
+`VAULT_PATH` apunta a una carpeta que no existe. O arreglás el registro (re-corré `install-*`) o `mkdir -p` el path a mano. Corré `the-truth-mcp doctor <path>` para diagnosticar.
+
+### `AGENTS.md no encontrado en <path>`
+
+A la bóveda le falta su archivo de schema. O apuntás `VAULT_PATH` a una carpeta creada con `the-truth-mcp init`, o copiás un template de `AGENTS.md` a mano (ver `src/the_truth_mcp/vault_starter/AGENTS.md`).
+
+### El MCP aparece pero las tools no responden
+
+El server arrancó pero algo en su startup falló silenciosamente (típico: env vars mal cargadas cuando lanzaste el cliente desde Spotlight/Dock en macOS). Cerrá el cliente y arrancalo desde la terminal donde tu shell rc se cargó. Alternativamente, asegurate de tener la key en `~/.config/the-truth-mcp/.env` — el server la carga sin depender del entorno del cliente.
 
 ---
 

@@ -25,6 +25,11 @@ dependencies = [
     "tomlkit>=0.13",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/guilleheizen/the-truth-mcp"
 Repository = "https://github.com/guilleheizen/the-truth-mcp"

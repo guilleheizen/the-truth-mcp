@@ -1,0 +1,16 @@
+# Local environment — keep secrets out of git
+.env
+.envrc
+
+# Client-specific runtime files (audit logs, caches)
+.claude/audit.log
+.claude/audit-*.log
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Editor backups
+*~
+*.swp
+*.swo

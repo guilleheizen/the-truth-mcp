@@ -119,28 +119,32 @@ def save_info(
     Si Gemini falla (sin red, sin API key), el archivo crudo igual queda
     guardado — raw es la verdad, wiki es una vista derivada.
     """
-    raw_path = vault.add_to_raw(content, slug=slug, title=title, source=source)
-    vault.append_log(
-        "ingest",
-        f"save_info {raw_path}",
-        body=f"- archivo: {raw_path}\n- source: {source or '(no especificado)'}",
-    )
-
-    response: dict = {"saved_at": raw_path}
-
     try:
-        plan, result = gemini_agent.reorganize(dry_run=False)
-        response["gemini_summary"] = plan.summary
-        response["operations_applied"] = result.applied
-        if result.errors:
-            response["gemini_errors"] = result.errors
-    except Exception as e:
-        response["gemini_error"] = (
-            f"El bibliotecario falló: {e}. La fuente quedó guardada en raw/, pero wiki/ no se actualizó. "
-            "Podés reintentar después corrigiendo el problema (ej. API key)."
-        )
+        with vault.vault_lock():
+            raw_path = vault.add_to_raw(content, slug=slug, title=title, source=source)
+            vault.append_log(
+                "ingest",
+                f"save_info {raw_path}",
+                body=f"- archivo: {raw_path}\n- source: {source or '(no especificado)'}",
+            )
 
-    return response
+            response: dict = {"saved_at": raw_path}
+
+            try:
+                plan, result = gemini_agent.reorganize(dry_run=False)
+                response["gemini_summary"] = plan.summary
+                response["operations_applied"] = result.applied
+                if result.errors:
+                    response["gemini_errors"] = result.errors
+            except Exception as e:
+                response["gemini_error"] = (
+                    f"El bibliotecario falló: {e}. La fuente quedó guardada en raw/, pero wiki/ no se actualizó. "
+                    "Podés reintentar después corrigiendo el problema (ej. API key)."
+                )
+
+            return response
+    except TimeoutError as e:
+        return {"error": str(e)}
 
 
 # ──────────────────────────────────────────────────────────────────────────────

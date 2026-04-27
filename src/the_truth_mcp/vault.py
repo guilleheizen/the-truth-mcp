@@ -6,9 +6,12 @@ agente Gemini llaman a estas funciones; nadie escribe directo al disco.
 
 from __future__ import annotations
 
+import fcntl
 import os
 import re
 import shutil
+import time
+from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 
@@ -82,6 +85,41 @@ def _resolve_slug(slug_or_path: str) -> Path:
         raise ValueError(f"Slug ambiguo '{slug_or_path}', matchea: {rels}")
 
     raise FileNotFoundError(f"No existe página para '{slug_or_path}'")
+
+
+_LOCK_FILENAME = ".lock"
+_LOCK_TIMEOUT_SECONDS = 60
+
+
+@contextmanager
+def vault_lock(timeout: float = _LOCK_TIMEOUT_SECONDS):
+    """Lock exclusivo a nivel del filesystem para serializar escrituras al vault.
+
+    Usa fcntl.flock sobre `<vault>/.lock`. Si no se puede adquirir en `timeout`
+    segundos, levanta TimeoutError. POSIX-only.
+    """
+    lock_path = vault_root() / _LOCK_FILENAME
+    lock_path.touch(exist_ok=True)
+    fh = lock_path.open("w")
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"Otro proceso tiene el lock del vault ({lock_path}). "
+                        f"Esperé {timeout}s. Reintentá en un momento."
+                    )
+                time.sleep(0.2)
+        yield
+    finally:
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            fh.close()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -257,8 +295,18 @@ def add_to_raw(
     """
     if not slug and not title:
         raise ValueError("Necesito al menos `slug` o `title` para nombrar el archivo")
-    final_slug = slug or slugify(title or "")
+    # Siempre normalizamos el slug — incluso si lo pasó el usuario. Esto
+    # neutraliza separadores de ruta (`../`, `/`) que de otro modo permitirían
+    # que un slug malicioso escape de `raw/` aún quedando dentro del vault.
+    final_slug = slugify(slug or title or "")
     target = _safe_path(f"raw/{final_slug}.md")
+    # Defensa en profundidad: aunque _safe_path ya impide escapar el vault,
+    # exigimos explícitamente que el archivo termine bajo raw/.
+    raw_root = (vault_root() / "raw").resolve()
+    try:
+        target.relative_to(raw_root)
+    except ValueError as e:
+        raise ValueError(f"El slug derivado escapa de raw/: {final_slug!r}") from e
     if target.exists():
         raise FileExistsError(f"raw/{final_slug}.md ya existe — raw es inmutable")
     target.parent.mkdir(parents=True, exist_ok=True)

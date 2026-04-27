@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json as _json
 import os
 import shutil
@@ -33,6 +34,23 @@ _PLACEHOLDER = "__VAULT_PATH__"
 def _template_root() -> Path:
     """Devuelve el path al template empaquetado (src/the_truth_mcp/vault_starter/)."""
     return Path(str(resources.files("the_truth_mcp").joinpath("vault_starter")))
+
+
+def _substitute_vault_path(root: Path, target_str: str) -> None:
+    """Reemplaza `_PLACEHOLDER` por `target_str` en cualquier archivo bajo `root`.
+
+    Idempotente: si el placeholder no aparece en un archivo, no lo toca. Ignora
+    archivos binarios (UnicodeDecodeError).
+    """
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if _PLACEHOLDER in text:
+            path.write_text(text.replace(_PLACEHOLDER, target_str), encoding="utf-8")
 
 
 def _is_empty_dir(p: Path) -> bool:
@@ -72,19 +90,8 @@ def init_vault(target: Path, *, force: bool = False) -> None:
     for keep in target.rglob(".gitkeep"):
         keep.unlink()
 
-    # Reemplazá el placeholder en .mcp.json (y en cualquier otro lugar que aparezca).
-    target_str = str(target)
-    for path in target.rglob("*"):
-        if not path.is_file():
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
-        if _PLACEHOLDER in text:
-            path.write_text(text.replace(_PLACEHOLDER, target_str), encoding="utf-8")
-
-    _print_next_steps(target)
+    # Reemplazá el placeholder en cualquier archivo del template.
+    _substitute_vault_path(target, str(target))
 
 
 def _print_next_steps(target: Path) -> None:
@@ -232,20 +239,41 @@ def _resolve_spawn(use_local_path: bool) -> tuple[str, list[str]]:
     return "uvx", ["--from", _GIT_REPO, "the-truth-mcp"]
 
 
-def _validate_key_available(key: str | None) -> int:
-    """Verifica que haya una key disponible (en el arg o en el shell). Retorna 0 si OK."""
+def _resolve_install_key(key: str | None) -> tuple[int, str | None]:
+    """Resuelve la API key a usar para el install.
+
+    Orden de precedencia:
+      1. `--key` arg → usar y persistir.
+      2. Variable de entorno (`_API_KEY_VARS`) → no devolver el valor, el server la
+         lee directo del shell. Retornamos `(0, None)`.
+      3. TTY → preguntar con `getpass` (input oculto). Si vacío, abortar.
+      4. Sin TTY y sin key → error.
+
+    Retorna `(exit_code, key_to_use_or_None)`.
+    """
+    if key:
+        return 0, key
+
     env_key_var = next((v for v in _API_KEY_VARS if os.environ.get(v)), None)
-    if not key and not env_key_var:
-        print(
-            "error: no encuentro una API key de Gemini.\n"
-            "  Opción A — pasala con --key <tu-key>\n"
-            "  Opción B — exportala en tu shell antes de correr install:\n"
-            "             export GEMINI_API_KEY=...\n"
-            "  Sacá una key gratis en https://aistudio.google.com/apikey",
-            file=sys.stderr,
+    if env_key_var:
+        return 0, None
+
+    if sys.stdin.isatty():
+        value = getpass.getpass(
+            "API key de Gemini (input oculto, Enter para abortar): "
         )
-        return 1
-    return 0
+        if value:
+            return 0, value
+
+    print(
+        "error: no encuentro una API key de Gemini.\n"
+        "  Opción A — pasala con --key <tu-key>\n"
+        "  Opción B — exportala en tu shell antes de correr install:\n"
+        "             export GEMINI_API_KEY=...\n"
+        "  Sacá una key gratis en https://aistudio.google.com/apikey",
+        file=sys.stderr,
+    )
+    return 1, None
 
 
 def _ensure_vault(vault: Path) -> tuple[int, Path]:
@@ -302,6 +330,7 @@ def _copy_client_extras(client_name: str, target: Path) -> None:
     shutil.copytree(src, target, dirs_exist_ok=True)
     for keep in target.rglob(".gitkeep"):
         keep.unlink(missing_ok=True)
+    _substitute_vault_path(target, str(target))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -490,7 +519,7 @@ def install(
     (chmod 600), y registra el MCP via `claude mcp add-json`. La key NUNCA va a
     parar a `~/.claude.json`.
     """
-    rc = _validate_key_available(key)
+    rc, key = _resolve_install_key(key)
     if rc:
         return rc
     rc, target = _ensure_vault(vault)
@@ -525,7 +554,7 @@ def install_codex(
     `[mcp_servers.<name>]`). No requiere tener `codex` instalado al momento de
     correr este comando — solo edita el archivo de config.
     """
-    rc = _validate_key_available(key)
+    rc, key = _resolve_install_key(key)
     if rc:
         return rc
     rc, target = _ensure_vault(vault)
@@ -559,7 +588,7 @@ def install_gemini(
     Igual que `install` pero registra en `~/.gemini/settings.json` (objeto
     `mcpServers`). No requiere tener `gemini` instalado al momento de correr.
     """
-    rc = _validate_key_available(key)
+    rc, key = _resolve_install_key(key)
     if rc:
         return rc
     rc, target = _ensure_vault(vault)
@@ -686,6 +715,7 @@ def main(argv: list[str] | None = None) -> int:
         except (RuntimeError, OSError) as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
+        _print_next_steps(Path(parsed.path))
         return 0
 
     if handler == "run":
