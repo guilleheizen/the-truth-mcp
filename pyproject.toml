@@ -1,0 +1,43 @@
+[project]
+name = "the-truth-mcp"
+version = "0.1.0"
+description = "MCP server que gestiona una bóveda LLM Wiki estilo Karpathy. Claude lee, Gemini ordena."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Guillermo Heizen", email = "guilleheizen@gmail.com" }]
+keywords = ["mcp", "claude", "gemini", "obsidian", "knowledge-base", "karpathy", "llm-wiki"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business",
+    "Topic :: Text Processing :: Markup :: Markdown",
+]
+requires-python = ">=3.11"
+dependencies = [
+    "mcp[cli]>=1.12.0",
+    "google-genai>=1.0.0",
+    "pydantic>=2.0",
+    "python-dotenv>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/guilleheizen/the-truth-mcp"
+Repository = "https://github.com/guilleheizen/the-truth-mcp"
+Issues = "https://github.com/guilleheizen/the-truth-mcp/issues"
+
+[project.scripts]
+the-truth-mcp = "the_truth_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/the_truth_mcp"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/the_truth_mcp/vault_starter" = "the_truth_mcp/vault_starter"

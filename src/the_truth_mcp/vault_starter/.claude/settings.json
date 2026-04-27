@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Read",
+      "Grep",
+      "Glob",
+      "mcp__the-truth__vault_search",
+      "mcp__the-truth__vault_read_page",
+      "mcp__the-truth__vault_list_pages",
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)"
+    ],
+    "deny": [
+      "Edit(raw/**)",
+      "Write(raw/**)",
+      "Bash(rm -rf:*)",
+      "Bash(git push:*)"
+    ],
+    "ask": [
+      "mcp__the-truth__save_info",
+      "Edit(.claude/**)",
+      "Edit(CLAUDE.md)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "mcp__the-truth__save_info",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ts=$(date '+%Y-%m-%d %H:%M:%S'); echo \"[$ts] save_info\" >> \"${CLAUDE_PROJECT_DIR:-.}/.claude/audit.log\""
+          }
+        ]
+      }
+    ]
+  }
+}
