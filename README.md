@@ -1,164 +1,197 @@
 # the-truth-mcp
 
-> Una bóveda LLM Wiki estilo Karpathy, gestionada por un MCP local.
-> **Claude consulta y guarda. Gemini ordena. El humano decide qué entra.**
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![MCP](https://img.shields.io/badge/MCP-compatible-7B68EE.svg)](https://modelcontextprotocol.io/)
+[![uvx](https://img.shields.io/badge/uvx-friendly-EF6C00.svg)](https://docs.astral.sh/uv/)
 
-Inspirado en [el patrón LLM Wiki de Andrej Karpathy](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f): en lugar de hacer RAG sobre chunks crudos en una vector DB, mantenés una bóveda markdown estructurada que **un agente reorganiza activamente**. El conocimiento *compounded* en lugar de re-descubrirse en cada query.
+> **Tu segundo cerebro como repo.** Tirás info al MCP. Gemini la organiza. Claude la consulta y la cita.
 
-## Arquitectura
+Un MCP local que convierte una carpeta de markdown en una **bóveda de conocimiento que se ordena sola**, basada en el [patrón LLM Wiki de Andrej Karpathy](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). En lugar de RAG sobre chunks crudos en una vector DB, mantenés un grafo de archivos `.md` interconectados que un agente reorganiza activamente.
 
-```
-Claude (cliente) ──save_info──▶ MCP ──▶ raw/        (plonk crudo, inmutable)
-                                  │
-                                  └──Gemini API──▶ wiki/  (Gemini ordena, automático)
+---
 
-Claude (cliente) ──vault_search/read_page──▶ MCP ──▶ wiki/  (solo lectura)
-```
+## Quickstart (30 segundos, sin clonar)
 
-**Reparto de responsabilidades estricto**:
-
-- **Claude** (vos, vía Claude Code): solo **consulta** y **guarda info cruda**. Nunca escribe en `wiki/`.
-- **MCP `the-truth`**: dueño del filesystem. Una sola tool de escritura (`save_info`).
-- **Gemini** (dentro del MCP): dueño exclusivo de `wiki/`. En cada `save_info`, lee toda la bóveda y reorganiza — crea, actualiza, fusiona, divide páginas, mantiene cross-references. No interviene en consultas.
-
-## Quickstart
-
-Necesitás [`uv`](https://docs.astral.sh/uv/getting-started/installation/) y [Claude Code](https://claude.com/claude-code).
+Necesitás [`uv`](https://docs.astral.sh/uv/getting-started/installation/), [Claude Code](https://claude.com/claude-code), y una [API key de Gemini](https://aistudio.google.com/apikey) (tier gratis alcanza).
 
 ```bash
-# 1. Clonar e instalar
-git clone https://github.com/guilleheizen/the-truth-mcp.git
-cd the-truth-mcp
-uv sync
+# 1. Crear bóveda — uvx baja el package, ejecuta init, y se va
+uvx --from git+https://github.com/guilleheizen/the-truth-mcp \
+    the-truth-mcp init ~/Documents/my-vault
 
-# 2. Crear una bóveda nueva en cualquier ruta
-uv run the-truth-mcp init ~/Documents/my-vault
+# 2. Cargar tu API key (en zshrc / bashrc / .env del vault)
+export GEMINI_API_KEY=AIza...
 
-# 3. Sacar una API key de Gemini (free tier)
-#    https://aistudio.google.com/apikey
-export GEMINI_API_KEY=tu-key
+# 3. Verificar setup
+uvx --from git+https://github.com/guilleheizen/the-truth-mcp \
+    the-truth-mcp doctor ~/Documents/my-vault
 
-# 4. Abrir la bóveda con Claude Code
+# 4. Abrir con Claude Code
 cd ~/Documents/my-vault
 claude
 ```
 
-Claude Code detecta el `.mcp.json` y te pregunta si querés cargar el MCP `the-truth`. Decí que sí. Probalo:
+Al abrirlo, Claude Code detecta el `.mcp.json` del vault y te pregunta si querés cargar el MCP `the-truth`. Decí que sí.
 
 ```
 /ingest https://karpathy.medium.com/software-2-0-a64152b37c35
-/query qué dice Karpathy sobre Software 2.0
+/query qué es Software 2.0
 ```
 
-## Cómo es el flujo
+---
 
-### Guardar info nueva (`/ingest <fuente>`)
+## Cómo funciona
 
-1. Claude fetchea la fuente (URL, PDF, texto).
-2. Llama a la tool `save_info` del MCP.
-3. El MCP guarda el contenido crudo en `raw/<slug>.md` (inmutable).
-4. El MCP dispara automáticamente al **bibliotecario Gemini**, que:
-   - Lee `CLAUDE.md` (el schema), todas las fuentes en `raw/`, y el estado actual de `wiki/`.
-   - **Decide la estructura de `wiki/`** según el contenido: subcarpetas, categorías, todo.
-   - Crea/actualiza/fusiona/linkea páginas.
-5. El log en `log.md` queda con la entrada.
+```
+Vos (Claude Code)
+       │
+       ├── /ingest <fuente>  ──save_info──▶  MCP  ──▶  raw/<slug>.md   (plonk crudo, inmutable)
+       │                                       │
+       │                                       └──Gemini API──▶  wiki/   (Gemini decide la estructura)
+       │
+       └── /query <pregunta> ──vault_search/read_page──▶  MCP  ──▶  wiki/   (solo lectura)
+```
 
-### Consultar (`/query <pregunta>`)
+**Tres roles, sin solapamiento**:
 
-1. Claude busca con `vault_search` y lee páginas con `vault_read_page`.
-2. Sintetiza una respuesta citando rutas de `wiki/...` y `raw/...`.
-3. Gemini **no interviene** — la lectura es directa contra el filesystem.
+| Rol | Quién | Qué hace |
+|---|---|---|
+| Cliente | Claude (vos) | **Consulta** y **guarda info cruda**. Nunca escribe en `wiki/`. |
+| Servidor | MCP `the-truth` | I/O sobre el filesystem. Una sola tool de escritura: `save_info`. |
+| Bibliotecario | Gemini (dentro del MCP) | Dueño exclusivo de `wiki/`. Lee toda la bóveda y reorganiza. |
 
-## Tools y Resources que expone el MCP
+---
 
-**Tools**:
+## Qué obtenés
+
+Una carpeta así, **mantenida automáticamente** a medida que tirás fuentes:
+
+```
+my-vault/
+├── CLAUDE.md         ← reglas del juego (vos las editás, Gemini las lee)
+├── raw/              ← inmutable: cada fuente que entró
+│   ├── software-2-0.md
+│   ├── attention-paper.md
+│   └── …
+├── wiki/             ← Gemini lo organiza solo
+│   ├── index.md
+│   ├── conceptos/    ← (o papers/, o personas/, o lo que Gemini decida)
+│   │   ├── software-2-0.md
+│   │   └── attention.md
+│   └── …
+└── log.md            ← bitácora append-only de cada operación
+```
+
+**Las páginas de `wiki/` se referencian entre sí** con `[[wikilinks]]` — funciona out-of-the-box con [Obsidian](https://obsidian.md), Logseq, o cualquier editor que entienda el formato.
+
+---
+
+## Arranca limpio, se adapta a tu dominio
+
+La bóveda **no impone categorías**. Gemini observa qué guardás y decide la organización. Si querés guiar la estructura, escribís convenciones en el `CLAUDE.md` del vault (hay una sección reservada).
+
+Algunos ejemplos de configuración (ver [`examples/`](examples/) en el repo):
+
+- **Investigación técnica** (default fit): `conceptos/`, `personas/`, `papers/`
+- **Producto / equipo**: `features/`, `decisiones/`, `incidentes/`, con `severity` en front-matter
+- **Consultoría**: `clientes/`, `proyectos/`, `lecciones-aprendidas/`
+- **Aprendizaje personal**: `temas/`, `recursos/`, `dudas/`
+- **Cocina**: `recetas/`, `tecnicas/`, `ingredientes/`
+
+Editás el `CLAUDE.md`, guardás algo nuevo, y Gemini empieza a respetar la convención. Sin tocar código.
+
+---
+
+## Tools y Resources del MCP
+
+**Tools** (4):
 
 | Tool | Descripción |
 |---|---|
 | `vault_search(query, limit?)` | Grep en `wiki/`. Devuelve archivo + línea. |
 | `vault_read_page(slug_or_path)` | Contenido completo de una página. |
-| `vault_list_pages(category?)` | Lista páginas. `category` es la subcarpeta dentro de `wiki/` (libre). |
-| `save_info(content, title?, slug?, source?)` | Guarda crudo + dispara Gemini. |
+| `vault_list_pages(category?)` | Lista páginas. `category` es subcarpeta de `wiki/` (libre). |
+| `save_info(content, title?, slug?, source?)` | Guarda crudo en `raw/` + dispara Gemini. |
 
-**Resources** (lectura via `@`-mention en Claude Code):
+**Resources** (lectura via `@`-mention):
 
 - `vault://index` — el catálogo
 - `vault://log` — la bitácora completa
 - `vault://claude` — el `CLAUDE.md` (schema vivo)
 - `vault://page/{category}/{slug}` — cualquier página
 
-## Configuración (env vars)
+---
 
-| Variable | Obligatoria | Descripción |
-|---|---|---|
-| `LLM_WIKI_PATH` | sí | Path absoluto a la bóveda. El `init` lo deja preconfigurado en el `.mcp.json` del vault. |
-| `GEMINI_API_KEY` | sí (para `save_info`) | API key de [Google AI Studio](https://aistudio.google.com/apikey). Tier gratis alcanza para uso personal. |
-| `GEMINI_MODEL` | no | Default `gemini-2.5-flash`. Opciones: `gemini-2.5-pro` (más caro, mejor razonamiento). |
+## Configuración
 
-Las podés definir en tu shell (`export`), en un `.env` del repo del MCP, o directamente en el bloque `env` del `.mcp.json` del vault.
+Variables de entorno (cualquiera de estas formas funciona: shell, `.env` del vault, `env` del `.mcp.json`):
 
-## Estructura del vault (lo que `init` te crea)
+| Variable | Obligatoria | Default | Descripción |
+|---|---|---|---|
+| `LLM_WIKI_PATH` | sí | — | Path absoluto a la bóveda. `init` ya lo deja en `.mcp.json`. |
+| `GEMINI_API_KEY` | sí (para `save_info`) | — | API key de [Google AI Studio](https://aistudio.google.com/apikey). |
+| `GEMINI_MODEL` | no | `gemini-2.5-flash` | Modelo del bibliotecario. `gemini-2.5-pro` para más calidad. |
 
+Aliases aceptados para la key: `GOOGLE_API_KEY`, `GEMINI_APIKEY`, `GOOGLE_GENAI_API_KEY`.
+
+---
+
+## CLI
+
+```bash
+the-truth-mcp                       # arranca el server MCP (stdio) — esto usa Claude Code
+the-truth-mcp init <path>           # crea una bóveda nueva
+the-truth-mcp doctor [<path>]       # verifica setup (env vars, key, vault, salud de Gemini)
+the-truth-mcp --version
 ```
-my-vault/
-├── CLAUDE.md                    ← schema vivo (Claude + Gemini lo leen)
-├── .mcp.json                    ← registra the-truth para esta bóveda
-├── .claude/
-│   ├── settings.json            ← permissions + hooks
-│   ├── commands/{ingest,query}.md
-│   └── skills/markdown-cleaner/SKILL.md
-├── raw/                         ← fuentes inmutables (vacío al inicio)
-├── wiki/                        ← mantenido por Gemini (vacío al inicio)
-│   └── index.md
-└── log.md                       ← bitácora append-only
-```
 
-La bóveda **arranca vacía**. No hay categorías predefinidas (`conceptos/`, `papers/`, etc.). Gemini observa qué guardás y decide la organización. Si querés guiar la estructura para tu dominio, agregalo al `CLAUDE.md` del vault — Gemini la respeta.
+---
 
 ## Por qué Gemini y no Claude para reorganizar
 
-- **Context de 1M tokens**: Gemini lee la bóveda completa en una sola request. Claude tendría que paginar.
-- **Económico**: Gemini Flash es muy barato — el `save_info` se puede llamar seguido sin pánico de quemar tokens de Claude.
-- **Separación de roles**: Claude es el lector que cita; Gemini es el bibliotecario que ordena. El humano arbitra.
+- **Context de 1M tokens**: lee la bóveda completa en una sola request. Claude tendría que paginar.
+- **Económico**: Gemini Flash es muy barato — `save_info` se puede llamar seguido sin pánico.
+- **Separación de roles**: Claude lee y cita; Gemini es el bibliotecario que ordena. El humano arbitra.
 
-Si más adelante querés cambiarlo (Claude haciendo todo, otro modelo, modelo local), está aislado en `gemini_agent.py`.
+Si querés cambiarlo (Claude haciendo todo, otro modelo, modelo local), está aislado en `src/the_truth_mcp/gemini_agent.py`.
+
+---
 
 ## Desarrollo
 
+Ver [CONTRIBUTING.md](CONTRIBUTING.md) para el flujo completo. Quick tour:
+
 ```bash
-uv sync                           # instalar deps
-uv run the-truth-mcp run          # arrancar el server (stdio)
-uv run python -m the_truth_mcp.server  # equivalente
+git clone https://github.com/guilleheizen/the-truth-mcp.git
+cd the-truth-mcp
+uv sync
+uv run the-truth-mcp run            # corre el server localmente
 ```
 
-Estructura del paquete:
+Estructura:
 
 ```
 src/the_truth_mcp/
-├── server.py            ← FastMCP: tools + resources
-├── vault.py             ← I/O sobre el filesystem (sin LLM)
-├── gemini_agent.py      ← bibliotecario Gemini (one-shot, JSON estructurado)
-├── schemas.py           ← Pydantic: Plan + 7 tipos de Operation
-├── cli.py               ← `init` y dispatch
-└── vault_starter/       ← template del vault que usa `init`
+├── server.py        ← FastMCP: tools + resources
+├── vault.py         ← I/O sobre el filesystem (sin LLM, testeable)
+├── gemini_agent.py  ← bibliotecario Gemini (one-shot, JSON estructurado)
+├── schemas.py       ← Pydantic: Plan + 7 tipos de Operation
+├── cli.py           ← init, doctor, run
+└── vault_starter/   ← template que copia `init`
 ```
 
-## Adaptable a tu dominio
-
-La bóveda no impone categorías. Gemini decide la estructura según lo que guardes — pero podés guiar esa decisión escribiendo convenciones en el `CLAUDE.md` del vault. Hay una sección "Convenciones de mi dominio" reservada para eso. Ejemplos:
-
-- **Producto/equipo**: `features/`, `decisiones/`, `incidentes/`, con un campo `severity` en el front-matter.
-- **Consultoría**: `clientes/`, `proyectos/`, `lecciones-aprendidas/`.
-- **Investigación técnica**: `conceptos/`, `personas/`, `papers/`.
-- **Cocina**: `recetas/`, `tecnicas/`, `ingredientes/`.
-
-Editás el `CLAUDE.md`, guardás info nueva, y Gemini empieza a respetar la convención. **No hace falta tocar código.**
+---
 
 ## Limitaciones conocidas
 
-- **Sin retry automático**: si Gemini falla durante `save_info`, el archivo crudo igual queda guardado en `raw/`. La fuente no se pierde, pero `wiki/` no se actualiza hasta que llamés `save_info` nuevamente con otra fuente (o agregues una tool de retry — PRs welcome).
-- **One-shot, no agent loop**: Gemini emite un único Plan estructurado por invocación. No hace múltiples pasadas. Para bóvedas muy grandes esto puede ser limitante.
-- **No hay merge inteligente del log**: `log.md` es append-only, nunca se compacta.
+- **Sin retry automático**: si Gemini falla durante `save_info`, el crudo queda en `raw/` pero `wiki/` no se actualiza hasta el próximo `save_info`. La info no se pierde.
+- **One-shot, no agent loop**: Gemini emite un único Plan por invocación. Para bóvedas muy grandes (>500k tokens de contenido) puede ser limitante.
+- **`log.md` no se compacta**: append-only, crece indefinido.
+
+PRs bienvenidos para cualquiera de estos.
+
+---
 
 ## License
 

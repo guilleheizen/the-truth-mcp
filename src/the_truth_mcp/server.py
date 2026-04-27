@@ -24,12 +24,19 @@ from __future__ import annotations
 
 from typing import Annotated
 
+import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
-# Carga .env del cwd o ancestros antes de tocar env vars.
-load_dotenv()
+# Carga .env desde varios lugares razonables (en orden de prioridad descendente).
+# Si una variable ya está en el environment, no se pisa.
+load_dotenv()  # cwd y ancestros
+_vault_path = os.environ.get("LLM_WIKI_PATH")
+if _vault_path:
+    load_dotenv(Path(_vault_path).expanduser() / ".env", override=False)
 
 from . import gemini_agent, vault  # noqa: E402  (después de load_dotenv)
 

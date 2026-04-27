@@ -123,12 +123,18 @@ def _build_user_prompt() -> str:
     return "".join(parts)
 
 
+_API_KEY_VARS = ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_APIKEY", "GOOGLE_GENAI_API_KEY")
+
+
 def _client() -> genai.Client:
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    api_key = next((os.environ[v] for v in _API_KEY_VARS if os.environ.get(v)), None)
     if not api_key:
         raise RuntimeError(
-            "GEMINI_API_KEY no está seteada. Sacá una key gratis en "
-            "https://aistudio.google.com/apikey y agregala a tu .env."
+            "No encuentro la API key de Gemini. Definí una de estas variables "
+            f"de entorno: {', '.join(_API_KEY_VARS)}.\n"
+            "Sacá una key gratis en https://aistudio.google.com/apikey "
+            "y exportala (`export GEMINI_API_KEY=...`) o agregala a un .env "
+            "en la raíz de tu vault o del proyecto MCP."
         )
     return genai.Client(api_key=api_key)
 

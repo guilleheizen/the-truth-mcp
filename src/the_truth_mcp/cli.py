@@ -1,17 +1,22 @@
-"""CLI: subcomandos del package, ahora mismo solo `init`.
+"""CLI: subcomandos del package.
 
 `uv run the-truth-mcp` (sin args)        → corre el server MCP (default).
 `uv run the-truth-mcp init <path>`       → crea una bóveda nueva en <path>.
 `uv run the-truth-mcp run`               → alias explícito del server.
+`uv run the-truth-mcp doctor [<path>]`   → verifica el setup (env vars, key, vault).
+`uv run the-truth-mcp --version`         → imprime la versión.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import sys
 from importlib import resources
 from pathlib import Path
+
+from . import __version__
 
 
 _PLACEHOLDER = "__VAULT_PATH__"
@@ -99,11 +104,85 @@ def _print_next_steps(target: Path) -> None:
     print()
 
 
+_API_KEY_VARS = ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_APIKEY", "GOOGLE_GENAI_API_KEY")
+
+
+def _check(label: str, ok: bool, detail: str = "") -> bool:
+    icon = "✓" if ok else "✗"
+    line = f"  {icon} {label}"
+    if detail:
+        line += f": {detail}"
+    print(line)
+    return ok
+
+
+def doctor(vault_path: Path | None) -> int:
+    """Verifica el setup del usuario. Reporta y devuelve exit code."""
+    from dotenv import load_dotenv
+
+    print("the-truth-mcp doctor\n")
+
+    load_dotenv()
+    if vault_path:
+        load_dotenv(vault_path.expanduser() / ".env", override=False)
+
+    all_ok = True
+
+    # 1. API key
+    found_var = next((v for v in _API_KEY_VARS if os.environ.get(v)), None)
+    all_ok &= _check(
+        "API key de Gemini",
+        bool(found_var),
+        detail=(found_var or f"falta — definí una de: {', '.join(_API_KEY_VARS)}"),
+    )
+
+    # 2. Vault path
+    if vault_path:
+        target = vault_path.expanduser().resolve()
+        all_ok &= _check("vault existe", target.is_dir(), detail=str(target))
+        all_ok &= _check(
+            "CLAUDE.md presente", (target / "CLAUDE.md").is_file()
+        )
+        all_ok &= _check("raw/ presente", (target / "raw").is_dir())
+        all_ok &= _check("wiki/ presente", (target / "wiki").is_dir())
+        all_ok &= _check(
+            "log.md presente", (target / "log.md").is_file()
+        )
+    else:
+        env_vault = os.environ.get("LLM_WIKI_PATH")
+        if env_vault:
+            print(f"  ℹ  LLM_WIKI_PATH={env_vault} (re-corré con `doctor {env_vault}` para verificar el vault)")
+        else:
+            print("  ℹ  pasame un path al vault para verificarlo: `the-truth-mcp doctor <path>`")
+
+    # 3. Llamada de salud a Gemini (si hay key y se pidió)
+    if found_var:
+        try:
+            from google import genai
+            client = genai.Client(api_key=os.environ[found_var])
+            model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+            response = client.models.generate_content(
+                model=model, contents="Responde solo con 'ok'."
+            )
+            ok = "ok" in (response.text or "").lower()
+            all_ok &= _check(f"Gemini responde ({model})", ok, detail=(response.text or "").strip()[:40])
+        except Exception as e:
+            all_ok &= _check("Gemini responde", False, detail=str(e)[:80])
+
+    print()
+    if all_ok:
+        print("Todo en orden.")
+        return 0
+    print("Faltan cosas — ver errores arriba.")
+    return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="the-truth-mcp",
         description="MCP server: bóveda LLM Wiki. Claude lee, Gemini ordena.",
     )
+    parser.add_argument("--version", action="version", version=f"the-truth-mcp {__version__}")
     sub = parser.add_subparsers(dest="command")
 
     p_run = sub.add_parser("run", help="Corre el server MCP (stdio). Default si no se pasa subcomando.")
@@ -113,6 +192,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("path", help="Ruta donde crear la bóveda (ej: ~/Documents/my-vault)")
     p_init.add_argument("--force", action="store_true", help="Sobreescribir si la ruta no está vacía")
     p_init.set_defaults(handler="init")
+
+    p_doc = sub.add_parser("doctor", help="Verifica el setup (env vars, API key, vault).")
+    p_doc.add_argument("path", nargs="?", help="Ruta del vault a verificar (opcional)")
+    p_doc.set_defaults(handler="doctor")
 
     return parser
 
@@ -144,6 +227,9 @@ def main(argv: list[str] | None = None) -> int:
 
         run_server()
         return 0
+
+    if handler == "doctor":
+        return doctor(Path(parsed.path) if parsed.path else None)
 
     parser.print_help()
     return 0
