@@ -64,9 +64,12 @@ Reglas duras (estas no se negocian):
 - Nombres de archivo: kebab-case ASCII, terminan en `.md`.
 - Citas a `raw/` al final del párrafo factual: `(raw/foo.md)`.
 - Al menos 1 wikilink por página (excepto si la bóveda tiene 1 sola página).
-- Front-matter mínimo en cada `create_page` o `update_page`: `title`, `created`
-  (YYYY-MM-DD), `updated`, `sources`, `related`. Podés agregar más campos si
-  el dominio lo pide o si el `AGENTS.md` los define.
+- Front-matter mínimo en cada `create_page` o `update_page`: `title`, `summary`,
+  `created` (YYYY-MM-DD), `updated`, `sources`, `related`. El campo `summary`
+  es 1-2 oraciones (≤200 chars) que describen qué cubre la página — pensalo
+  como respuesta a "¿qué encuentro acá que no se adivina del título?". Si una
+  página existente no tiene `summary`, agregalo en el próximo `update_page`.
+  Podés agregar más campos si el dominio lo pide o si el `AGENTS.md` los define.
 - Si un raw está pendiente, prioridad #1: crear las páginas que reflejen su contenido.
 - Si encontrás info duplicada o contradictoria entre páginas, proponé `merge_pages`.
 - Sé conservador: mejor 5 operaciones bien justificadas que 30 ruidosas.
