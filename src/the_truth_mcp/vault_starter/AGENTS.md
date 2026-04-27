@@ -1,6 +1,6 @@
 # LLM Wiki — Schema
 
-Esta es una **bóveda de conocimiento** estilo [Karpathy](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). Este archivo es el manual de operaciones — lo lee el agente cliente del MCP (Claude Code, Cursor, ChatGPT, lo que sea) y también el bibliotecario interno (Gemini) cada vez que reorganiza la bóveda.
+Esta es una **bóveda de conocimiento** estilo [Karpathy](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). Este archivo es el manual de operaciones — lo lee el agente cliente del MCP (cualquier herramienta MCP-compatible) y también el bibliotecario interno (Gemini) cada vez que reorganiza la bóveda.
 
 > Editá este archivo libremente. A medida que tu bóveda crezca y descubras convenciones que te sirven, agregalas acá. Gemini lo relee en cada operación de escritura — el schema co-evoluciona con vos.
 
@@ -17,7 +17,7 @@ Agente cliente ──vault_search/read_page──▶ MCP ──▶ wiki/  (solo 
 ```
 
 **Reparto de roles**:
-- **Agente cliente del MCP** (vos, vía Claude Code / Cursor / ChatGPT / etc.): solo dos cosas — **consultar** la bóveda y **guardar** info nueva. Nunca escribe en `wiki/`.
+- **Agente cliente del MCP** (vos, vía cualquier herramienta MCP-compatible): solo dos cosas — **consultar** la bóveda y **guardar** info nueva. Nunca escribe en `wiki/`.
 - **MCP `the-truth`**: I/O sobre el filesystem. Cuando llega info nueva (`save_info`), la guarda cruda en `raw/` y dispara al bibliotecario Gemini automáticamente.
 - **Gemini (dentro del MCP)**: dueño exclusivo de `wiki/`. Lee toda la bóveda y la reorganiza — crea, actualiza, fusiona, divide páginas, mantiene cross-references. **Decide la estructura**.
 

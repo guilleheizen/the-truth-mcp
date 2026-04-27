@@ -22,6 +22,7 @@ dependencies = [
     "google-genai>=1.0.0",
     "pydantic>=2.0",
     "python-dotenv>=1.0",
+    "tomlkit>=0.13",
 ]
 
 [project.urls]
@@ -41,3 +42,4 @@ packages = ["src/the_truth_mcp"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/the_truth_mcp/vault_starter" = "the_truth_mcp/vault_starter"
+"src/the_truth_mcp/client_extras" = "the_truth_mcp/client_extras"

@@ -131,21 +131,12 @@ def read_log(n: int = 20) -> str:
 
 
 def read_agents_md() -> str:
-    """El schema vivo. Útil para inyectarlo al prompt de Gemini.
-
-    Busca primero AGENTS.md (nombre canónico, agent-agnostic). Si no existe,
-    cae a CLAUDE.md por compatibilidad con vaults viejos.
-    """
+    """El schema vivo. Útil para inyectarlo al prompt de Gemini."""
     root = vault_root()
-    for name in ("AGENTS.md", "CLAUDE.md"):
-        candidate = root / name
-        if candidate.is_file():
-            return candidate.read_text(encoding="utf-8")
-    raise FileNotFoundError(f"Ni AGENTS.md ni CLAUDE.md encontrados en {root}")
-
-
-# Alias deprecado para back-compat. Se removerá en una versión futura.
-read_claude_md = read_agents_md
+    candidate = root / "AGENTS.md"
+    if not candidate.is_file():
+        raise FileNotFoundError(f"AGENTS.md no encontrado en {root}")
+    return candidate.read_text(encoding="utf-8")
 
 
 def search(query: str, limit: int = 50) -> list[dict[str, object]]:
@@ -293,7 +284,7 @@ def add_to_raw(
 
 
 def _ensure_under_wiki(rel_path: str) -> Path:
-    """Permite escribir solo dentro de wiki/. Bloquea raw/, .claude/, etc."""
+    """Permite escribir solo dentro de wiki/. Bloquea raw/ y cualquier otra cosa fuera de wiki/."""
     if not rel_path.startswith("wiki/"):
         raise ValueError(f"Solo se puede escribir bajo wiki/: {rel_path}")
     return _safe_path(rel_path)

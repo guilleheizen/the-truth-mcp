@@ -8,9 +8,7 @@
         "the-truth-mcp"
       ],
       "env": {
-        "VAULT_PATH": "__VAULT_PATH__",
-        "GEMINI_API_KEY": "${GEMINI_API_KEY}",
-        "GEMINI_MODEL": "gemini-2.5-flash"
+        "VAULT_PATH": "__VAULT_PATH__"
       }
     }
   }

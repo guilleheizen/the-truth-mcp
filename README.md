@@ -5,59 +5,64 @@
 [![MCP](https://img.shields.io/badge/MCP-compatible-7B68EE.svg)](https://modelcontextprotocol.io/)
 [![uvx](https://img.shields.io/badge/uvx-friendly-EF6C00.svg)](https://docs.astral.sh/uv/)
 
-> **Tu segundo cerebro como repo.** Tirás info al MCP. Gemini la organiza. Claude la consulta y la cita.
+> **Tu segundo cerebro como repo.** Tirás info al MCP. Gemini la organiza. Tu cliente MCP la consulta y la cita.
 
 Un MCP local que convierte una carpeta de markdown en una **bóveda de conocimiento que se ordena sola**, basada en el [patrón LLM Wiki de Andrej Karpathy](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). En lugar de RAG sobre chunks crudos en una vector DB, mantenés un grafo de archivos `.md` interconectados que un agente reorganiza activamente.
+
+El MCP es **agnóstico al cliente**: corre con cualquier herramienta MCP-compatible (Claude Code, Codex CLI, Gemini CLI, Cursor, Claude Desktop, ChatGPT, …). Lo único interno al server es Gemini — el bibliotecario que reorganiza la bóveda.
 
 ---
 
 ## Quickstart (un solo comando)
 
-Necesitás [`uv`](https://docs.astral.sh/uv/getting-started/installation/), [Claude Code](https://claude.com/claude-code), y una [API key de Gemini](https://aistudio.google.com/apikey) (tier gratis alcanza).
+Necesitás [`uv`](https://docs.astral.sh/uv/getting-started/installation/), un cliente MCP, y una [API key de Gemini](https://aistudio.google.com/apikey) (tier gratis alcanza).
+
+Elegí el comando según el cliente que uses:
 
 ```bash
+# Claude Code (Anthropic)
 uvx --from git+https://github.com/guilleheizen/the-truth-mcp \
-    the-truth-mcp install \
+    the-truth-mcp install-claude \
       --vault ~/Documents/my-vault \
-      --key AIza...your-gemini-key... \
-      --model gemini-2.5-flash
+      --key AIza...your-gemini-key...
+
+# Codex CLI (OpenAI) — registra en ~/.codex/config.toml
+uvx --from git+https://github.com/guilleheizen/the-truth-mcp \
+    the-truth-mcp install-codex --vault ~/Documents/my-vault --key AIza...
+
+# Gemini CLI (Google) — registra en ~/.gemini/settings.json
+uvx --from git+https://github.com/guilleheizen/the-truth-mcp \
+    the-truth-mcp install-gemini --vault ~/Documents/my-vault --key AIza...
 ```
 
-Eso solo:
-1. Crea la bóveda en `~/Documents/my-vault` si no existe (con todos los archivos del template).
-2. Registra el MCP en Claude Code a nivel **usuario** (disponible en cualquier proyecto).
-3. Pasa la API key y el modelo como env vars del MCP.
+Cada `install*` hace lo mismo:
+1. Crea la bóveda en el path indicado si no existe.
+2. Registra el MCP en el archivo de config nativo del cliente correspondiente.
+3. Guarda la API key y el modelo en `~/.config/the-truth-mcp/.env` con permisos `600` — **nunca** en el archivo de config del cliente. El secreto vive en un solo lugar y se comparte entre todos los clientes.
 
-Después abrís Claude Code en cualquier folder:
+> **Si ya tenés `GEMINI_API_KEY` exportada en tu shell** (zshrc/bashrc), podés omitir `--key`. El server lee primero del entorno y solo cae al `.env` global si no encuentra nada — el shell siempre gana.
 
-```bash
-claude
-```
-
-```
-/ingest https://karpathy.medium.com/software-2-0-a64152b37c35
-/query qué es Software 2.0
-```
+Después abrís el cliente apuntando al vault y usás las tools del MCP (`save_info`, `vault_search`, `vault_read_page`, `vault_list_pages`).
 
 ---
 
 ## Cómo funciona
 
 ```
-Vos (Claude Code)
+Tu cliente MCP
        │
-       ├── /ingest <fuente>  ──save_info──▶  MCP  ──▶  raw/<slug>.md   (plonk crudo, inmutable)
-       │                                       │
-       │                                       └──Gemini API──▶  wiki/   (Gemini decide la estructura)
+       ├── save_info(...)         ──▶ MCP ──▶ raw/<slug>.md  (plonk crudo, inmutable)
+       │                                │
+       │                                └── Gemini API ──▶ wiki/  (Gemini decide la estructura)
        │
-       └── /query <pregunta> ──vault_search/read_page──▶  MCP  ──▶  wiki/   (solo lectura)
+       └── vault_search / vault_read_page ──▶ MCP ──▶ wiki/  (solo lectura)
 ```
 
 **Tres roles, sin solapamiento**:
 
 | Rol | Quién | Qué hace |
 |---|---|---|
-| Cliente | Claude (vos) | **Consulta** y **guarda info cruda**. Nunca escribe en `wiki/`. |
+| Cliente | Cualquier herramienta MCP (vos) | **Consulta** y **guarda info cruda**. Nunca escribe en `wiki/`. |
 | Servidor | MCP `the-truth` | I/O sobre el filesystem. Una sola tool de escritura: `save_info`. |
 | Bibliotecario | Gemini (dentro del MCP) | Dueño exclusivo de `wiki/`. Lee toda la bóveda y reorganiza. |
 
@@ -125,40 +130,52 @@ Editás el `AGENTS.md`, guardás algo nuevo, y Gemini empieza a respetar la conv
 
 ## Configuración
 
-Variables de entorno (cualquiera de estas formas funciona: shell, `.env` del vault, `env` del `.mcp.json`):
+El server resuelve las variables en este orden (la primera que tenga valor gana):
+
+1. **Entorno del proceso** — exports de tu shell (`~/.zshrc`, `~/.bashrc`).
+2. **`.env` del cwd** — útil para correr el server desde un repo.
+3. **`<vault>/.env`** — config por bóveda.
+4. **`~/.config/the-truth-mcp/.env`** — config global del usuario (lo que escribe `install`).
 
 | Variable | Obligatoria | Default | Descripción |
 |---|---|---|---|
-| `VAULT_PATH` | sí | — | Path absoluto a la bóveda. `init` ya lo deja en `.mcp.json`. Alias: `LLM_WIKI_PATH`. |
+| `VAULT_PATH` | sí | — | Path absoluto a la bóveda. Cada `install*` lo registra en el config del cliente. Alias: `LLM_WIKI_PATH`. |
 | `GEMINI_API_KEY` | sí (para `save_info`) | — | API key de [Google AI Studio](https://aistudio.google.com/apikey). |
 | `GEMINI_MODEL` | no | `gemini-2.5-flash` | Modelo del bibliotecario. `gemini-2.5-pro` para más calidad. |
 
 Aliases aceptados para la key: `GOOGLE_API_KEY`, `GEMINI_APIKEY`, `GOOGLE_GENAI_API_KEY`.
+
+### Por qué la key vive en `~/.config/the-truth-mcp/.env` y no en el config del cliente
+
+Los archivos de config de los clientes MCP (`~/.claude.json`, `~/.codex/config.toml`, `~/.gemini/settings.json`) son archivos que: a) los abren apps GUI sin pasar por tu shell, b) la gente comparte o sube a repos por error, c) no tienen permisos restrictivos. Guardar la API key ahí en texto plano es un footgun. La config global del MCP vive en su propio archivo con `chmod 600`, es cargada solo por el server, y se comparte entre todos los clientes — instalá en tres herramientas distintas y la key sigue en un único lugar.
 
 ---
 
 ## CLI
 
 ```bash
-the-truth-mcp                       # arranca el server MCP (stdio) — esto usa Claude Code
-the-truth-mcp install --vault <p> --key <k> [--model <m>]
-                                    # all-in-one: vault + registro en Claude Code
-the-truth-mcp init <path>           # crea una bóveda nueva (sin registrar)
-the-truth-mcp doctor [<path>]       # verifica setup (env vars, key, vault, salud de Gemini)
+the-truth-mcp                              # arranca el server MCP (stdio) — esto lo invoca el cliente
+the-truth-mcp init <path>                  # crea una bóveda nueva (sin registrar)
+the-truth-mcp install-claude --vault <p>   # registra en Claude Code (~/.claude.json)
+the-truth-mcp install-codex  --vault <p>   # registra en Codex CLI (~/.codex/config.toml)
+the-truth-mcp install-gemini --vault <p>   # registra en Gemini CLI (~/.gemini/settings.json)
+the-truth-mcp doctor [<path>]              # verifica setup (env vars, key, vault, salud de Gemini)
 the-truth-mcp --version
 ```
 
-`install` por defecto usa `--scope user`. Si querés instalarlo solo en un proyecto, pasá `--scope project` (genera `.mcp.json` en cwd) o `--scope local` (solo tu copia local del proyecto).
+Las flags compartidas por los tres `install-*` son: `--vault`, `--key` (opcional si la key ya está en tu shell), `--model`, `--name`, `--local`. El comando `install-claude` acepta además `--scope {user,local,project}` para elegir dónde registrar el MCP en Claude Code.
+
+Podés correr varios `install*` contra la misma bóveda — cada cliente tiene su propio archivo de config y la key se comparte vía `~/.config/the-truth-mcp/.env`.
 
 ---
 
-## Por qué Gemini y no Claude para reorganizar
+## Por qué Gemini para reorganizar
 
-- **Context de 1M tokens**: lee la bóveda completa en una sola request. Claude tendría que paginar.
+- **Context de 1M tokens**: lee la bóveda completa en una sola request. Otros modelos tendrían que paginar.
 - **Económico**: Gemini Flash es muy barato — `save_info` se puede llamar seguido sin pánico.
-- **Separación de roles**: Claude lee y cita; Gemini es el bibliotecario que ordena. El humano arbitra.
+- **Separación de roles**: el cliente MCP lee y cita; Gemini es el bibliotecario que ordena. El humano arbitra.
 
-Si querés cambiarlo (Claude haciendo todo, otro modelo, modelo local), está aislado en `src/the_truth_mcp/gemini_agent.py`.
+Si querés cambiarlo (otro modelo, modelo local), está aislado en `src/the_truth_mcp/gemini_agent.py`.
 
 ---
 
@@ -177,12 +194,14 @@ Estructura:
 
 ```
 src/the_truth_mcp/
-├── server.py        ← FastMCP: tools + resources
-├── vault.py         ← I/O sobre el filesystem (sin LLM, testeable)
-├── gemini_agent.py  ← bibliotecario Gemini (one-shot, JSON estructurado)
-├── schemas.py       ← Pydantic: Plan + 7 tipos de Operation
-├── cli.py           ← init, doctor, run
-└── vault_starter/   ← template que copia `init`
+├── server.py         ← FastMCP: tools + resources
+├── vault.py          ← I/O sobre el filesystem (sin LLM, testeable)
+├── gemini_agent.py   ← bibliotecario Gemini (one-shot, JSON estructurado)
+├── schemas.py        ← Pydantic: Plan + 7 tipos de Operation
+├── cli.py            ← init, doctor, run, install*
+├── vault_starter/    ← template client-agnostic que copia `init`
+└── client_extras/    ← archivos que cada `install-<cliente>` agrega al vault
+    └── claude-code/  ← .claude/ (slash commands, permisos, hooks)
 ```
 
 ---

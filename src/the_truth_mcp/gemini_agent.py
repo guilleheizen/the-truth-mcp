@@ -7,10 +7,11 @@ Diseño deliberado de un solo turno (no agent loop): cargamos todo el contexto
 en un prompt, Gemini responde con JSON validado contra Pydantic, el server
 del MCP aplica el plan vía vault.py.
 
-Por qué Gemini y no Claude:
+Por qué Gemini para esta tarea:
 - Context de 1M tokens permite mandar la bóveda entera en una sola request.
 - Flash es muy barato — el reorganize se puede correr seguido sin pánico.
-- Separación de responsabilidades narrativa: Claude lee, Gemini ordena.
+- Separación de responsabilidades: el cliente MCP solo consulta y guarda crudo;
+  Gemini, dentro del server, es el único que escribe en wiki/.
 """
 
 from __future__ import annotations
@@ -141,9 +142,12 @@ def _client() -> genai.Client:
         raise RuntimeError(
             "No encuentro la API key de Gemini. Definí una de estas variables "
             f"de entorno: {', '.join(_API_KEY_VARS)}.\n"
-            "Sacá una key gratis en https://aistudio.google.com/apikey "
-            "y exportala (`export GEMINI_API_KEY=...`) o agregala a un .env "
-            "en la raíz de tu vault o del proyecto MCP."
+            "Sacá una key gratis en https://aistudio.google.com/apikey y dejala "
+            "disponible de alguna de estas formas:\n"
+            "  • exportala en tu shell rc (`export GEMINI_API_KEY=...`)\n"
+            "  • corré `the-truth-mcp install --vault <path> --key ...` para "
+            "guardarla en ~/.config/the-truth-mcp/.env\n"
+            "  • agregala a un .env en la raíz de tu vault"
         )
     return genai.Client(api_key=api_key)
 

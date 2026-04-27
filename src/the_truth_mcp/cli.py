@@ -1,12 +1,16 @@
 """CLI: subcomandos del package.
 
-`uv run the-truth-mcp` (sin args)        → corre el server MCP (default).
-`uv run the-truth-mcp init <path>`       → crea una bóveda nueva en <path>.
-`uv run the-truth-mcp install ...`       → all-in-one: crea vault si falta + registra
-                                            el MCP en Claude Code (scope user).
-`uv run the-truth-mcp run`               → alias explícito del server.
-`uv run the-truth-mcp doctor [<path>]`   → verifica el setup (env vars, key, vault).
-`uv run the-truth-mcp --version`         → imprime la versión.
+`uv run the-truth-mcp` (sin args)         → corre el server MCP (default).
+`uv run the-truth-mcp init <path>`        → crea una bóveda nueva en <path>.
+`uv run the-truth-mcp install-claude ...` → all-in-one para Claude Code: vault +
+                                             registro en `~/.claude.json`.
+`uv run the-truth-mcp install-codex ...`  → mismo flujo, registra en Codex CLI
+                                             (`~/.codex/config.toml`).
+`uv run the-truth-mcp install-gemini ...` → mismo flujo, registra en Gemini CLI
+                                             (`~/.gemini/settings.json`).
+`uv run the-truth-mcp run`                → alias explícito del server.
+`uv run the-truth-mcp doctor [<path>]`    → verifica el setup (env vars, key, vault).
+`uv run the-truth-mcp --version`          → imprime la versión.
 """
 
 from __future__ import annotations
@@ -92,19 +96,23 @@ def _print_next_steps(target: Path) -> None:
     print("  1. Sacá una API key de Gemini (free tier):")
     print("     https://aistudio.google.com/apikey")
     print()
-    print("  2. Exportala en tu shell (o ponela en un .env del repo):")
-    print("     export GEMINI_API_KEY=tu-key")
+    print("  2. Dejala disponible para el server. Cualquiera de estas opciones:")
     print()
-    print("  3. Abrí la bóveda con Claude Code:")
-    print(f"     cd {target}")
-    print("     claude")
+    print("     a) Exportala en tu shell rc (~/.zshrc, ~/.bashrc):")
+    print("        export GEMINI_API_KEY=tu-key")
     print()
-    print("     Claude Code va a detectar .mcp.json y te va a preguntar si querés")
-    print("     cargar el MCP `the-truth`. Decí que sí.")
+    print("     b) Guardala en la config global del MCP (chmod 600):")
+    print("        # se escribe automáticamente al correr cualquier `install*`")
+    print("        # → ~/.config/the-truth-mcp/.env")
     print()
-    print("  4. Probá los slash commands:")
-    print("     /ingest <url>     guardar info nueva")
-    print("     /query <pregunta> consultar la bóveda")
+    print("  3. Registrá el MCP en tu cliente preferido:")
+    print(f"     the-truth-mcp install-claude  --vault {target}   # Claude Code (Anthropic)")
+    print(f"     the-truth-mcp install-codex   --vault {target}   # Codex CLI (OpenAI)")
+    print(f"     the-truth-mcp install-gemini  --vault {target}   # Gemini CLI (Google)")
+    print()
+    print("  4. Abrí tu cliente apuntando al vault y empezá a usar el MCP:")
+    print("     - tools de lectura: vault_search, vault_read_page, vault_list_pages")
+    print("     - tool de escritura: save_info  (Gemini reorganiza la bóveda)")
     print()
 
 
@@ -129,6 +137,7 @@ def doctor(vault_path: Path | None) -> int:
     load_dotenv()
     if vault_path:
         load_dotenv(vault_path.expanduser() / ".env", override=False)
+    load_dotenv(Path.home() / ".config" / "the-truth-mcp" / ".env", override=False)
 
     all_ok = True
 
@@ -144,13 +153,7 @@ def doctor(vault_path: Path | None) -> int:
     if vault_path:
         target = vault_path.expanduser().resolve()
         all_ok &= _check("vault existe", target.is_dir(), detail=str(target))
-        has_agents = (target / "AGENTS.md").is_file()
-        has_claude = (target / "CLAUDE.md").is_file()
-        all_ok &= _check(
-            "AGENTS.md presente",
-            has_agents or has_claude,
-            detail="(usando CLAUDE.md como fallback)" if has_claude and not has_agents else "",
-        )
+        all_ok &= _check("AGENTS.md presente", (target / "AGENTS.md").is_file())
         all_ok &= _check("raw/ presente", (target / "raw").is_dir())
         all_ok &= _check("wiki/ presente", (target / "wiki").is_dir())
         all_ok &= _check(
@@ -186,22 +189,136 @@ def doctor(vault_path: Path | None) -> int:
 
 
 _GIT_REPO = "git+https://github.com/guilleheizen/the-truth-mcp"
+_USER_CONFIG_DIR = Path.home() / ".config" / "the-truth-mcp"
+_USER_ENV_FILE = _USER_CONFIG_DIR / ".env"
 
 
-def install(
-    vault: Path,
-    key: str,
-    *,
-    model: str = "gemini-2.5-flash",
-    scope: str = "user",
-    name: str = "the-truth",
-    use_local_path: bool = False,
-) -> int:
-    """All-in-one: crea el vault si falta y registra el MCP en Claude Code.
+def _write_user_env(key: str | None, model: str | None) -> Path:
+    """Escribe (upsert) la API key y el modelo en ~/.config/the-truth-mcp/.env.
 
-    Si `use_local_path=True`, usa el código local en lugar de bajar del repo
-    público (útil para desarrollo).
+    No pisa otras variables que el usuario haya puesto ahí. Si `key` o `model`
+    son None, no se tocan los valores existentes. Permisos 600.
     """
+    from dotenv import set_key
+
+    _USER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    if not _USER_ENV_FILE.exists():
+        _USER_ENV_FILE.touch(mode=0o600)
+    else:
+        # Asegurar permisos restrictivos aunque el archivo ya existiera.
+        os.chmod(_USER_ENV_FILE, 0o600)
+
+    if key:
+        # Usamos GEMINI_API_KEY como nombre canónico — el server acepta los
+        # aliases (GEMINI_APIKEY, GOOGLE_API_KEY, GOOGLE_GENAI_API_KEY) si el
+        # usuario los tiene exportados en su shell.
+        set_key(str(_USER_ENV_FILE), "GEMINI_API_KEY", key, quote_mode="never")
+    if model:
+        set_key(str(_USER_ENV_FILE), "GEMINI_MODEL", model, quote_mode="never")
+
+    return _USER_ENV_FILE
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Helpers compartidos por todos los `install-*`
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _resolve_spawn(use_local_path: bool) -> tuple[str, list[str]]:
+    """Cómo arrancar el server. Local (uv run) en dev, uvx desde el repo en prod."""
+    if use_local_path:
+        repo_root = str(Path(__file__).resolve().parent.parent.parent)
+        return "uv", ["run", "--directory", repo_root, "the-truth-mcp"]
+    return "uvx", ["--from", _GIT_REPO, "the-truth-mcp"]
+
+
+def _validate_key_available(key: str | None) -> int:
+    """Verifica que haya una key disponible (en el arg o en el shell). Retorna 0 si OK."""
+    env_key_var = next((v for v in _API_KEY_VARS if os.environ.get(v)), None)
+    if not key and not env_key_var:
+        print(
+            "error: no encuentro una API key de Gemini.\n"
+            "  Opción A — pasala con --key <tu-key>\n"
+            "  Opción B — exportala en tu shell antes de correr install:\n"
+            "             export GEMINI_API_KEY=...\n"
+            "  Sacá una key gratis en https://aistudio.google.com/apikey",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+def _ensure_vault(vault: Path) -> tuple[int, Path]:
+    """Crea el vault si falta o valida que el existente es uno válido.
+
+    Retorna (exit_code, target_path). exit_code != 0 → abortar.
+    """
+    target = vault.expanduser().resolve()
+    if not target.exists() or _is_empty_dir(target):
+        print(f"→ Creando bóveda en {target}")
+        init_vault(target, force=False)
+    else:
+        if not (target / "AGENTS.md").is_file():
+            print(
+                f"error: {target} existe pero no parece un vault de the-truth-mcp "
+                "(falta AGENTS.md). Borralo o usá otro path.",
+                file=sys.stderr,
+            )
+            return 1, target
+        print(f"→ Bóveda existente detectada en {target}")
+    return 0, target
+
+
+def _persist_key_and_model(key: str | None, model: str) -> Path:
+    """Upserta la key (si vino) y el modelo en la config global del usuario.
+
+    Si la key vino solo del shell, se imprime de dónde la tomamos.
+    """
+    if key:
+        env_file = _write_user_env(key=key, model=model)
+        print(f"→ Guardando API key en {env_file} (permisos 600)")
+    else:
+        shell_var = next(v for v in _API_KEY_VARS if os.environ.get(v))
+        env_file = _write_user_env(key=None, model=model)
+        print(f"→ Usando API key de tu shell (${shell_var}). Modelo guardado en {env_file}.")
+    return env_file
+
+
+def _client_extras_dir(client_name: str) -> Path | None:
+    """Devuelve el path empaquetado a client_extras/<client_name>/ si existe."""
+    p = Path(str(resources.files("the_truth_mcp").joinpath("client_extras", client_name)))
+    return p if p.is_dir() else None
+
+
+def _copy_client_extras(client_name: str, target: Path) -> None:
+    """Copia client_extras/<client_name>/* sobre el vault. No-op si no hay extras.
+
+    Idempotente: pisa nuestros archivos pero no toca lo que el usuario haya
+    agregado por su cuenta en otros paths.
+    """
+    src = _client_extras_dir(client_name)
+    if src is None:
+        return
+    shutil.copytree(src, target, dirs_exist_ok=True)
+    for keep in target.rglob(".gitkeep"):
+        keep.unlink(missing_ok=True)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Registrars por cliente — cada uno escribe en el archivo de config nativo
+# del cliente correspondiente.
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _register_claude_code(
+    *,
+    target: Path,
+    name: str,
+    scope: str,
+    spawn_command: str,
+    spawn_args: list[str],
+) -> int:
+    """Registra el MCP en Claude Code via `claude mcp add-json`."""
     if shutil.which("claude") is None:
         print(
             "error: no se encuentra el ejecutable `claude` en el PATH. "
@@ -210,52 +327,19 @@ def install(
         )
         return 1
 
-    target = vault.expanduser().resolve()
-
-    # Crear el vault si todavía no existe
-    if not target.exists() or _is_empty_dir(target):
-        print(f"→ Creando bóveda en {target}")
-        init_vault(target, force=False)
-    else:
-        # Validar que parece un vault del MCP (tiene AGENTS.md o CLAUDE.md)
-        has_schema = (target / "AGENTS.md").is_file() or (target / "CLAUDE.md").is_file()
-        if not has_schema:
-            print(
-                f"error: {target} existe pero no parece un vault de the-truth-mcp "
-                "(falta AGENTS.md). Borralo o usá otro path.",
-                file=sys.stderr,
-            )
-            return 1
-        print(f"→ Bóveda existente detectada en {target}")
-
-    # Quitar registro previo (si existe) para no duplicar
+    # Idempotente: borrá registro previo antes de reinstalar
     subprocess.run(
         ["claude", "mcp", "remove", "--scope", scope, name],
         capture_output=True,
         check=False,
     )
 
-    # Construir el JSON de config del MCP — usamos `claude mcp add-json` para
-    # evitar el parsing ambiguo de `-e VAR=val` con nombres de servers.
-    if use_local_path:
-        repo_root = str(Path(__file__).resolve().parent.parent.parent)
-        spawn_command = "uv"
-        spawn_args = ["run", "--directory", repo_root, "the-truth-mcp"]
-    else:
-        spawn_command = "uvx"
-        spawn_args = ["--from", _GIT_REPO, "the-truth-mcp"]
-
     config = {
         "command": spawn_command,
         "args": spawn_args,
-        "env": {
-            "VAULT_PATH": str(target),
-            "GEMINI_API_KEY": key,
-            "GEMINI_MODEL": model,
-        },
+        "env": {"VAULT_PATH": str(target)},
     }
-
-    print(f"→ Registrando MCP `{name}` en scope {scope}")
+    print(f"→ Registrando MCP `{name}` en Claude Code (scope {scope})")
     result = subprocess.run(
         ["claude", "mcp", "add-json", "--scope", scope, name, _json.dumps(config)],
         capture_output=True,
@@ -265,26 +349,274 @@ def install(
         print(f"error: claude mcp add-json falló:\n{result.stderr}", file=sys.stderr)
         return result.returncode
 
+    # Extras específicos para Claude Code: slash commands, permisos, hooks.
+    _copy_client_extras("claude-code", target)
+    return 0
+
+
+def _register_codex(
+    *,
+    target: Path,
+    name: str,
+    spawn_command: str,
+    spawn_args: list[str],
+) -> int:
+    """Registra el MCP en Codex CLI (OpenAI) editando ~/.codex/config.toml.
+
+    Codex usa una tabla TOML `[mcp_servers.<name>]` con `command`, `args`, `env`.
+    """
+    import tomlkit
+
+    config_path = Path.home() / ".codex" / "config.toml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if config_path.is_file():
+        try:
+            doc = tomlkit.parse(config_path.read_text(encoding="utf-8"))
+        except Exception as e:  # noqa: BLE001
+            print(f"error: {config_path} tiene TOML inválido: {e}", file=sys.stderr)
+            return 1
+    else:
+        doc = tomlkit.document()
+
+    if "mcp_servers" not in doc:
+        doc["mcp_servers"] = tomlkit.table(is_super_table=True)
+
+    server_entry = tomlkit.table()
+    server_entry["command"] = spawn_command
+    server_entry["args"] = list(spawn_args)
+    env_table = tomlkit.table()
+    env_table["VAULT_PATH"] = str(target)
+    server_entry["env"] = env_table
+    doc["mcp_servers"][name] = server_entry  # type: ignore[index]
+
+    config_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+    print(f"→ Registrando MCP `{name}` en Codex CLI ({config_path})")
+    return 0
+
+
+def _register_gemini_cli(
+    *,
+    target: Path,
+    name: str,
+    spawn_command: str,
+    spawn_args: list[str],
+) -> int:
+    """Registra el MCP en Gemini CLI (Google) editando ~/.gemini/settings.json.
+
+    Gemini CLI usa el mismo schema que Claude Desktop / Cursor: un objeto
+    top-level `mcpServers` con `command`, `args`, `env`.
+    """
+    config_path = Path.home() / ".gemini" / "settings.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if config_path.is_file():
+        raw = config_path.read_text(encoding="utf-8").strip() or "{}"
+        try:
+            doc = _json.loads(raw)
+        except _json.JSONDecodeError as e:
+            print(f"error: {config_path} tiene JSON inválido: {e}", file=sys.stderr)
+            return 1
+    else:
+        doc = {}
+
+    mcp_servers = doc.setdefault("mcpServers", {})
+    mcp_servers[name] = {
+        "command": spawn_command,
+        "args": list(spawn_args),
+        "env": {"VAULT_PATH": str(target)},
+    }
+
+    config_path.write_text(_json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    print(f"→ Registrando MCP `{name}` en Gemini CLI ({config_path})")
+    return 0
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Subcomandos `install`, `install-codex`, `install-gemini`
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+_PROBE_HINTS = {
+    "claude-code": (
+        "  cd {target}",
+        "  claude",
+        "  # luego dentro de Claude Code:",
+        "  /mcp                 # confirma que `the-truth` está conectado",
+        "  /ingest <url>        # guardar info nueva",
+        "  /query <pregunta>    # consultar la bóveda",
+    ),
+    "codex": (
+        "  cd {target}",
+        "  codex",
+        "  # dentro de Codex, listá los MCPs activos para confirmar `the-truth`.",
+    ),
+    "gemini-cli": (
+        "  cd {target}",
+        "  gemini",
+        "  # dentro de Gemini CLI: /mcp list debería mostrar `the-truth`.",
+    ),
+}
+
+
+def _print_install_success(
+    *, client: str, target: Path, model: str, env_file: Path, name: str, scope: str | None
+) -> None:
     print()
-    print(f"✓ MCP `{name}` instalado.")
-    print(f"  vault: {target}")
+    print(f"✓ MCP `{name}` instalado en {client}.")
+    print(f"  vault:  {target}")
     print(f"  modelo: {model}")
-    print(f"  scope: {scope}")
+    if scope is not None:
+        print(f"  scope:  {scope}")
+    print(f"  config: {env_file} (key + modelo del bibliotecario)")
     print()
     print("Probalo:")
-    print(f"  cd {target}")
-    print("  claude")
-    print("  # luego dentro de Claude Code:")
-    print("  /mcp                 # confirma que `the-truth` está conectado")
-    print("  /ingest <url>        # guardar info nueva")
-    print("  /query <pregunta>    # consultar la bóveda")
+    for line in _PROBE_HINTS[client]:
+        print(line.format(target=target))
+
+
+def install(
+    vault: Path,
+    key: str | None,
+    *,
+    model: str = "gemini-2.5-flash",
+    scope: str = "user",
+    name: str = "the-truth",
+    use_local_path: bool = False,
+) -> int:
+    """Instala el MCP en Claude Code.
+
+    Crea la bóveda si falta, persiste la API key en `~/.config/the-truth-mcp/.env`
+    (chmod 600), y registra el MCP via `claude mcp add-json`. La key NUNCA va a
+    parar a `~/.claude.json`.
+    """
+    rc = _validate_key_available(key)
+    if rc:
+        return rc
+    rc, target = _ensure_vault(vault)
+    if rc:
+        return rc
+    spawn_command, spawn_args = _resolve_spawn(use_local_path)
+    env_file = _persist_key_and_model(key, model)
+    rc = _register_claude_code(
+        target=target, name=name, scope=scope,
+        spawn_command=spawn_command, spawn_args=spawn_args,
+    )
+    if rc:
+        return rc
+    _print_install_success(
+        client="claude-code", target=target, model=model,
+        env_file=env_file, name=name, scope=scope,
+    )
     return 0
+
+
+def install_codex(
+    vault: Path,
+    key: str | None,
+    *,
+    model: str = "gemini-2.5-flash",
+    name: str = "the-truth",
+    use_local_path: bool = False,
+) -> int:
+    """Instala el MCP en Codex CLI (OpenAI).
+
+    Igual que `install` pero registra en `~/.codex/config.toml` (tabla
+    `[mcp_servers.<name>]`). No requiere tener `codex` instalado al momento de
+    correr este comando — solo edita el archivo de config.
+    """
+    rc = _validate_key_available(key)
+    if rc:
+        return rc
+    rc, target = _ensure_vault(vault)
+    if rc:
+        return rc
+    spawn_command, spawn_args = _resolve_spawn(use_local_path)
+    env_file = _persist_key_and_model(key, model)
+    rc = _register_codex(
+        target=target, name=name,
+        spawn_command=spawn_command, spawn_args=spawn_args,
+    )
+    if rc:
+        return rc
+    _print_install_success(
+        client="codex", target=target, model=model,
+        env_file=env_file, name=name, scope=None,
+    )
+    return 0
+
+
+def install_gemini(
+    vault: Path,
+    key: str | None,
+    *,
+    model: str = "gemini-2.5-flash",
+    name: str = "the-truth",
+    use_local_path: bool = False,
+) -> int:
+    """Instala el MCP en Gemini CLI (Google).
+
+    Igual que `install` pero registra en `~/.gemini/settings.json` (objeto
+    `mcpServers`). No requiere tener `gemini` instalado al momento de correr.
+    """
+    rc = _validate_key_available(key)
+    if rc:
+        return rc
+    rc, target = _ensure_vault(vault)
+    if rc:
+        return rc
+    spawn_command, spawn_args = _resolve_spawn(use_local_path)
+    env_file = _persist_key_and_model(key, model)
+    rc = _register_gemini_cli(
+        target=target, name=name,
+        spawn_command=spawn_command, spawn_args=spawn_args,
+    )
+    if rc:
+        return rc
+    _print_install_success(
+        client="gemini-cli", target=target, model=model,
+        env_file=env_file, name=name, scope=None,
+    )
+    return 0
+
+
+def _add_common_install_flags(p: argparse.ArgumentParser) -> None:
+    """Flags compartidas por install / install-codex / install-gemini."""
+    p.add_argument(
+        "--vault",
+        required=True,
+        help="Ruta absoluta a la bóveda (ej: ~/Documents/my-vault). Se crea si no existe.",
+    )
+    p.add_argument(
+        "--key",
+        default=None,
+        help=(
+            "API key de Gemini (https://aistudio.google.com/apikey). "
+            "Opcional si ya la tenés exportada en tu shell como GEMINI_API_KEY "
+            "(o aliases: GOOGLE_API_KEY, GEMINI_APIKEY, GOOGLE_GENAI_API_KEY)."
+        ),
+    )
+    p.add_argument(
+        "--model",
+        default="gemini-2.5-flash",
+        help="Modelo de Gemini para el bibliotecario (default: gemini-2.5-flash).",
+    )
+    p.add_argument(
+        "--name",
+        default="the-truth",
+        help="Nombre del MCP server (default: the-truth).",
+    )
+    p.add_argument(
+        "--local",
+        action="store_true",
+        help="Usar el código local del repo en lugar de uvx desde GitHub (para desarrollo).",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="the-truth-mcp",
-        description="MCP server: bóveda LLM Wiki. Claude lee, Gemini ordena.",
+        description="MCP server: bóveda LLM Wiki agnóstica al cliente. Gemini ordena.",
     )
     parser.add_argument("--version", action="version", version=f"the-truth-mcp {__version__}")
     sub = parser.add_subparsers(dest="command")
@@ -301,42 +633,35 @@ def build_parser() -> argparse.ArgumentParser:
     p_doc.add_argument("path", nargs="?", help="Ruta del vault a verificar (opcional)")
     p_doc.set_defaults(handler="doctor")
 
+    # install-claude — Anthropic Claude Code.
     p_inst = sub.add_parser(
-        "install",
-        help="Crea el vault si falta y registra el MCP en Claude Code en un solo paso.",
+        "install-claude",
+        help="Crea el vault si falta y registra el MCP en Claude Code (Anthropic).",
     )
-    p_inst.add_argument(
-        "--vault",
-        required=True,
-        help="Ruta absoluta a la bóveda (ej: ~/Documents/my-vault). Se crea si no existe.",
-    )
-    p_inst.add_argument(
-        "--key",
-        required=True,
-        help="API key de Gemini (https://aistudio.google.com/apikey). Tier gratis alcanza.",
-    )
-    p_inst.add_argument(
-        "--model",
-        default="gemini-2.5-flash",
-        help="Modelo de Gemini para el bibliotecario (default: gemini-2.5-flash).",
-    )
+    _add_common_install_flags(p_inst)
     p_inst.add_argument(
         "--scope",
         choices=["user", "local", "project"],
         default="user",
         help="Scope de Claude Code donde registrar el MCP (default: user).",
     )
-    p_inst.add_argument(
-        "--name",
-        default="the-truth",
-        help="Nombre del MCP server en Claude Code (default: the-truth).",
+    p_inst.set_defaults(handler="install-claude")
+
+    # install-codex — OpenAI Codex CLI.
+    p_cdx = sub.add_parser(
+        "install-codex",
+        help="Crea el vault si falta y registra el MCP en Codex CLI (OpenAI).",
     )
-    p_inst.add_argument(
-        "--local",
-        action="store_true",
-        help="Usar el código local del repo en lugar de uvx desde GitHub (para desarrollo).",
+    _add_common_install_flags(p_cdx)
+    p_cdx.set_defaults(handler="install-codex")
+
+    # install-gemini — Google Gemini CLI.
+    p_gem = sub.add_parser(
+        "install-gemini",
+        help="Crea el vault si falta y registra el MCP en Gemini CLI (Google).",
     )
-    p_inst.set_defaults(handler="install")
+    _add_common_install_flags(p_gem)
+    p_gem.set_defaults(handler="install-gemini")
 
     return parser
 
@@ -372,12 +697,30 @@ def main(argv: list[str] | None = None) -> int:
     if handler == "doctor":
         return doctor(Path(parsed.path) if parsed.path else None)
 
-    if handler == "install":
+    if handler == "install-claude":
         return install(
             vault=Path(parsed.vault),
             key=parsed.key,
             model=parsed.model,
             scope=parsed.scope,
+            name=parsed.name,
+            use_local_path=parsed.local,
+        )
+
+    if handler == "install-codex":
+        return install_codex(
+            vault=Path(parsed.vault),
+            key=parsed.key,
+            model=parsed.model,
+            name=parsed.name,
+            use_local_path=parsed.local,
+        )
+
+    if handler == "install-gemini":
+        return install_gemini(
+            vault=Path(parsed.vault),
+            key=parsed.key,
+            model=parsed.model,
             name=parsed.name,
             use_local_path=parsed.local,
         )

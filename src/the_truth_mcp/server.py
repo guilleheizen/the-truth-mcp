@@ -33,11 +33,18 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 # Carga .env desde varios lugares razonables (en orden de prioridad descendente).
-# Si una variable ya está en el environment, no se pisa.
-load_dotenv()  # cwd y ancestros
+# Si una variable ya está en el environment, no se pisa: el shell siempre gana.
+# Orden:
+#   1. cwd y ancestros           (proyecto local)
+#   2. <vault>/.env              (config por bóveda)
+#   3. ~/.config/the-truth-mcp/.env  (config global del usuario — donde install
+#      escribe la API key para que la herramienta sea ready-to-work sin
+#      depender de cómo se lance el cliente MCP)
+load_dotenv()
 _vault_path = os.environ.get("VAULT_PATH") or os.environ.get("LLM_WIKI_PATH")
 if _vault_path:
     load_dotenv(Path(_vault_path).expanduser() / ".env", override=False)
+load_dotenv(Path.home() / ".config" / "the-truth-mcp" / ".env", override=False)
 
 from . import gemini_agent, vault  # noqa: E402  (después de load_dotenv)
 
@@ -155,13 +162,7 @@ def res_log() -> str:
 
 @mcp.resource("vault://agents")
 def res_agents() -> str:
-    """AGENTS.md — el schema vivo (alias: vault://claude para back-compat)."""
-    return vault.read_agents_md()
-
-
-@mcp.resource("vault://claude")
-def res_claude_alias() -> str:
-    """Alias deprecado de vault://agents. Se removerá en una versión futura."""
+    """AGENTS.md — el schema vivo de la bóveda."""
     return vault.read_agents_md()
 
 
@@ -177,7 +178,7 @@ def res_page(category: str, slug: str) -> str:
 
 
 def run_server() -> None:
-    """Arranca el server con stdio transport (modo local, para Claude Code)."""
+    """Arranca el server con stdio transport (modo local, lo levanta el cliente MCP)."""
     mcp.run(transport="stdio")
 
 

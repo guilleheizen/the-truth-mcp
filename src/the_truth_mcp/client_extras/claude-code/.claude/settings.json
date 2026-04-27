@@ -21,7 +21,7 @@
     "ask": [
       "mcp__the-truth__save_info",
       "Edit(.claude/**)",
-      "Edit(CLAUDE.md)"
+      "Edit(AGENTS.md)"
     ]
   },
   "hooks": {
