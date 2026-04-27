@@ -44,6 +44,27 @@ wiki/
 └── papers/             ← una página por paper o artículo fuente
 ```
 
+### 2.1 Adaptar las categorías a tu dominio
+
+Las categorías por defecto (`conceptos`, `personas`, `papers`) están pensadas para investigación técnica/académica al estilo Karpathy. **Son completamente personalizables** — el sistema no las hardcodea, son una convención que vive en este `CLAUDE.md`.
+
+Para adaptar la bóveda a otro dominio:
+
+1. **Editá esta sección** describiendo tus propias categorías y qué va en cada una.
+2. **Renombrá / creá las carpetas** correspondientes en `wiki/`.
+3. **Actualizá los valores válidos de `type` en el front-matter** (sección 3).
+4. La próxima vez que se llame `save_info`, Gemini va a leer este archivo actualizado y respetar las nuevas categorías.
+
+Ejemplos de configuración por dominio:
+
+- **Investigación / IA** (default): `conceptos/`, `personas/`, `papers/`.
+- **Producto / Equipo**: `features/`, `decisiones/`, `usuarios/`, `incidentes/`.
+- **Consultoría**: `clientes/`, `proyectos/`, `propuestas/`, `lecciones-aprendidas/`.
+- **Aprendizaje personal**: `temas/`, `recursos/`, `dudas/`, `proyectos/`.
+- **Cocina**: `recetas/`, `tecnicas/`, `ingredientes/`.
+
+Lo único que **no** debés cambiar es la separación `raw/` (inmutable) vs `wiki/` (Gemini ordena) vs `log.md` — esa es la arquitectura del MCP.
+
 ## 3. Convenciones de archivos
 
 - **Nombres**: `kebab-case.md`. Sin tildes, sin mayúsculas, sin espacios.
@@ -52,7 +73,7 @@ wiki/
   ```yaml
   ---
   title: Título Humano
-  type: concepto            # concepto | persona | paper
+  type: concepto            # uno de los tipos definidos en sección 2 / 2.1
   created: 2026-04-27
   updated: 2026-04-27
   sources:                  # rutas relativas a raw/, o URLs

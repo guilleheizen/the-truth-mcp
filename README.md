@@ -146,6 +146,16 @@ src/the_truth_mcp/
 └── vault_starter/       ← template del vault que usa `init`
 ```
 
+## Adaptable a tu dominio
+
+Las categorías por defecto del template (`conceptos/`, `personas/`, `papers/`) son una convención del **`CLAUDE.md` del vault**, no del MCP. Para adaptar la bóveda a otro dominio:
+
+1. Editás la sección "Estructura de `wiki/`" del `CLAUDE.md` describiendo tus categorías.
+2. Renombrás / creás las carpetas en `wiki/`.
+3. Listo — Gemini lee el `CLAUDE.md` actualizado en cada `save_info` y respeta las nuevas convenciones.
+
+Ejemplos: producto (`features/`, `decisiones/`, `incidentes/`), consultoría (`clientes/`, `proyectos/`, `lecciones-aprendidas/`), cocina (`recetas/`, `tecnicas/`, `ingredientes/`). El MCP en sí mismo no impone categorías — solo provee la mecánica de "raw inmutable + wiki gestionado por agente + log auditable".
+
 ## Limitaciones conocidas
 
 - **Sin retry automático**: si Gemini falla durante `save_info`, el archivo crudo igual queda guardado en `raw/`. La fuente no se pierde, pero `wiki/` no se actualiza hasta que llamés `save_info` nuevamente con otra fuente (o agregues una tool de retry — PRs welcome).
